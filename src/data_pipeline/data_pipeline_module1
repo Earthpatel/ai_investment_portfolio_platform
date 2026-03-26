@@ -1,0 +1,146 @@
+# data_pipeline_module1.py
+import yfinance as yf
+import pandas as pd
+import os
+
+# -------------------------------
+# 1. Load tickers from CSV
+# -------------------------------
+def load_tickers(csv_path="data/raw/sp500_tickers.csv"):
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Could not find {csv_path}. Check your folder structure!")
+    
+    tickers_df = pd.read_csv(csv_path)
+    column_name = 'Symbol' if 'Symbol' in tickers_df.columns else 'Ticker'
+    tickers = tickers_df[column_name].str.replace('.', '-', regex=False).tolist()
+    return tickers
+
+# -------------------------------
+# 2. Build lazy-loading stock database
+# -------------------------------
+def build_stock_database(tickers):
+    stock_data = {}
+    for ticker in tickers:
+        t_obj = yf.Ticker(ticker)
+        stock_data[ticker] = {
+            'history': lambda obj=t_obj: obj.history(period="5y"),
+            'info': lambda obj=t_obj: obj.info,
+            'financials': lambda obj=t_obj: obj.financials
+        }
+    print(f"Database initialized with {len(stock_data)} tickers.")
+    return stock_data
+
+# -------------------------------
+# 3. Build history DataFrame
+# -------------------------------
+def build_history_table(stock_data, tickers, limit=None):
+    all_history = pd.DataFrame()
+    tickers_to_use = tickers if not limit else tickers[:limit]
+    
+    for ticker in tickers_to_use:
+        try:
+            df = stock_data[ticker]['history']()
+            if df.empty:
+                print(f"No data for {ticker}")
+                continue
+            df['Ticker'] = ticker
+            all_history = pd.concat([all_history, df])
+        except Exception as e:
+            print(f"Error fetching {ticker}: {e}")
+    
+    all_history.reset_index(inplace=True)  # make Date a column
+    if 'Ticker' in all_history.columns:
+        cols = ['Ticker'] + [c for c in all_history.columns if c != 'Ticker']
+        all_history = all_history[cols]
+    return all_history
+
+# -------------------------------
+# 4. Build info DataFrame
+# -------------------------------
+def build_info_table(stock_data, tickers, limit=None):
+    all_info = pd.DataFrame()
+    tickers_to_use = tickers if not limit else tickers[:limit]
+    
+    for ticker in tickers_to_use:
+        try:
+            info_dict = stock_data[ticker]['info']()
+            if not info_dict:
+                print(f"No info for {ticker}")
+                continue
+            info_dict['Ticker'] = ticker
+            all_info = pd.concat([all_info, pd.DataFrame([info_dict])], ignore_index=True)
+        except Exception as e:
+            print(f"Error fetching info for {ticker}: {e}")
+    
+    if 'Ticker' not in all_info.columns:
+        all_info['Ticker'] = tickers_to_use[:len(all_info)]
+    cols = ['Ticker'] + [c for c in all_info.columns if c != 'Ticker']
+    all_info = all_info[cols]
+    return all_info
+
+# -------------------------------
+# 5. Build financials DataFrame
+# -------------------------------
+def build_financials_table(stock_data, tickers, limit=None):
+    all_financials = pd.DataFrame()
+    tickers_to_use = tickers if not limit else tickers[:limit]
+    
+    for ticker in tickers_to_use:
+        try:
+            fin_df = stock_data[ticker]['financials']()
+            if fin_df.empty:
+                print(f"No financials for {ticker}")
+                continue
+            
+            latest_col = fin_df.columns[0]
+            latest_data = fin_df[latest_col].copy().to_frame().T
+            latest_data['Ticker'] = ticker
+            all_financials = pd.concat([all_financials, latest_data], ignore_index=True)
+        except Exception as e:
+            print(f"Error fetching financials for {ticker}: {e}")
+    
+    if 'Ticker' not in all_financials.columns:
+        all_financials['Ticker'] = tickers_to_use[:len(all_financials)]
+    cols = ['Ticker'] + [c for c in all_financials.columns if c != 'Ticker']
+    all_financials = all_financials[cols]
+    return all_financials
+
+# -------------------------------
+# 6. Save DataFrames to CSV
+# -------------------------------
+def save_csv(df, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    df.to_csv(path, index=False)
+    print(f"Saved: {path}")
+
+# -------------------------------
+# 7. Main pipeline
+# -------------------------------
+def main():
+    tickers = load_tickers()
+    stock_data = build_stock_database(tickers)
+    
+    # Optional: limit to 10 tickers for testing
+    limit = 10
+    
+    all_history = build_history_table(stock_data, tickers, limit=limit)
+    all_info = build_info_table(stock_data, tickers, limit=limit)
+    all_financials = build_financials_table(stock_data, tickers, limit=limit)
+    
+    # Save processed CSVs
+    save_csv(all_history, "data/processed/all_history.csv")
+    save_csv(all_info, "data/processed/all_info.csv")
+    save_csv(all_financials, "data/processed/all_financials.csv")
+    
+    # Merge into master dataset
+    master_df = all_history.merge(all_info, on='Ticker', how='left') \
+                           .merge(all_financials, on='Ticker', how='left')
+    save_csv(master_df, "data/processed/master_dataset.csv")
+    print("All done! Master dataset created.")
+
+# -------------------------------
+# Run script
+# -------------------------------
+if __name__ == "__main__":
+    main()
+
