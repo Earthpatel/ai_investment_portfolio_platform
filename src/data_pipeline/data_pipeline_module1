@@ -1,4 +1,3 @@
-# data_pipeline_module1.py
 import yfinance as yf
 import pandas as pd
 import os
@@ -49,8 +48,11 @@ def build_history_table(stock_data, tickers, limit=None):
             print(f"Error fetching {ticker}: {e}")
     
     all_history.reset_index(inplace=True)  # make Date a column
+    # Extract year for merging with financials
+    all_history['Year'] = all_history['Date'].dt.year.astype(str)
+    
     if 'Ticker' in all_history.columns:
-        cols = ['Ticker'] + [c for c in all_history.columns if c != 'Ticker']
+        cols = ['Ticker'] + [c for c in all_history.columns if c not in ['Ticker', 'Year']] + ['Year']
         all_history = all_history[cols]
     return all_history
 
@@ -92,17 +94,20 @@ def build_financials_table(stock_data, tickers, limit=None):
                 print(f"No financials for {ticker}")
                 continue
             
-            latest_col = fin_df.columns[0]
-            latest_data = fin_df[latest_col].copy().to_frame().T
-            latest_data['Ticker'] = ticker
-            all_financials = pd.concat([all_financials, latest_data], ignore_index=True)
+            # TRANSPOSE: columns become rows (historical periods)
+            fin_df_T = fin_df.T
+            fin_df_T = fin_df_T.reset_index().rename(columns={'index': 'Year'})
+            # Keep only year part if datetime
+            fin_df_T['Year'] = fin_df_T['Year'].apply(lambda x: str(x)[:4])
+            fin_df_T['Ticker'] = ticker
+            all_financials = pd.concat([all_financials, fin_df_T], ignore_index=True)
         except Exception as e:
             print(f"Error fetching financials for {ticker}: {e}")
     
-    if 'Ticker' not in all_financials.columns:
-        all_financials['Ticker'] = tickers_to_use[:len(all_financials)]
-    cols = ['Ticker'] + [c for c in all_financials.columns if c != 'Ticker']
-    all_financials = all_financials[cols]
+    # Ensure Ticker is first column
+    if 'Ticker' in all_financials.columns:
+        cols = ['Ticker'] + [c for c in all_financials.columns if c not in ['Ticker', 'Year']] + ['Year']
+        all_financials = all_financials[cols]
     return all_financials
 
 # -------------------------------
@@ -132,9 +137,9 @@ def main():
     save_csv(all_info, "data/processed/all_info.csv")
     save_csv(all_financials, "data/processed/all_financials.csv")
     
-    # Merge into master dataset
+    # Merge into master dataset on Ticker + Year
     master_df = all_history.merge(all_info, on='Ticker', how='left') \
-                           .merge(all_financials, on='Ticker', how='left')
+                           .merge(all_financials, on=['Ticker','Year'], how='left')
     save_csv(master_df, "data/processed/master_dataset.csv")
     print("All done! Master dataset created.")
 
@@ -143,4 +148,4 @@ def main():
 # -------------------------------
 if __name__ == "__main__":
     main()
-
+    
