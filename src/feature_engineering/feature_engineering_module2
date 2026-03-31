@@ -1,0 +1,200 @@
+import pandas as pd
+import os
+
+# -------------------------------
+# 1. Load master dataset
+# -------------------------------
+def load_master_dataset(path="data/processed/master_dataset.csv"):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Could not find {path}. Check your folder structure!")
+    df = pd.read_csv(path, low_memory=False)
+    print(f"Loaded master dataset with {len(df)} rows and {len(df.columns)} columns")
+    return df
+
+# -------------------------------
+# 2. Fill missing values
+# -------------------------------
+def fill_missing_values(df):
+    # Columns to fill with 0
+    fill_zero_cols = [
+        'Salaries And Wages', 'Earnings From Equity Interest', 
+        'Loss Adjustment Expense', 'Policyholder Benefits Ceded', 
+        'Policyholder Benefits Gross', 'Net Policyholder Benefits And Claims',
+        'Write Off', 'Gain On Sale Of Ppe', 'Average Dilution Earnings',
+        'Other Special Charges', 'Selling And Marketing Expense', 
+        'Other Operating Expenses', 'Impairment Of Capital Assets',
+        'Gain On Sale Of Business', 'Restructuring And Mergern Acquisition'
+    ]
+
+    for col in fill_zero_cols:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
+
+    # Columns to fill with median
+    fill_median_cols = [
+        'fiveYearAvgDividendYield', 'earningsQuarterlyGrowth', 'lastDividendValue',
+        'lastDividendDate', 'debtToEquity', 'earningsGrowth', 'dividendDate',
+        'Normalized EBITDA', 'Total Unusual Items', 'Total Unusual Items Excluding Goodwill',
+        'Reconciled Depreciation', 'Reconciled Cost Of Revenue', 'EBITDA',
+        'Interest Income', 'Total Operating Income As Reported', 'Diluted Average Shares',
+        'Basic Average Shares', 'Diluted EPS', 'Basic EPS', 'Minority Interests',
+        'Net Income Discontinuous Operations', 'Earnings From Equity Interest Net Of Tax',
+        'Other Non Operating Income Expenses', 'Special Income Charges',
+        'Interest Income Non Operating', 'Operating Income', 'Operating Expense',
+        'Research And Development', 'Selling General And Administration',
+        'General And Administrative Expense', 'Other Gand A',
+        'Depreciation Amortization Depletion Income Statement',
+        'Depreciation And Amortization In Income Statement',
+        'Amortization', 'Amortization Of Intangibles Income Statement', 'Gross Profit',
+        'Cost Of Revenue'
+    ]
+
+    for col in fill_median_cols:
+        if col in df.columns:
+            median_value = df[col].median()
+            df[col] = df[col].fillna(median_value)
+    
+    return df
+
+# -------------------------------
+# 3. Compute returns
+# -------------------------------
+def compute_returns(df):
+    df = df.sort_values(by=['Ticker','Date']).reset_index(drop=True)
+    df['return_1d'] = df.groupby('Ticker')['Close'].pct_change()
+    df['return_5d'] = df.groupby('Ticker')['Close'].pct_change(5)
+    df['return_10d'] = df.groupby('Ticker')['Close'].pct_change(10)
+    df['return_21d'] = df.groupby('Ticker')['Close'].pct_change(21)
+    return df
+
+# -------------------------------
+# 4. Compute moving averages
+# -------------------------------
+def compute_moving_averages(df):
+    df['ma_5'] = df.groupby('Ticker')['Close'].rolling(5).mean().reset_index(level=0, drop=True)
+    df['ma_10'] = df.groupby('Ticker')['Close'].rolling(10).mean().reset_index(level=0, drop=True)
+    df['ma_21'] = df.groupby('Ticker')['Close'].rolling(21).mean().reset_index(level=0, drop=True)
+    # Price relative to MA
+    df['price_ma5_ratio'] = df['Close'] / df['ma_5']
+    df['price_ma10_ratio'] = df['Close'] / df['ma_10']
+    df['price_ma21_ratio'] = df['Close'] / df['ma_21']
+    return df
+
+# -------------------------------
+# 5. Compute volatility
+# -------------------------------
+def compute_volatility(df):
+    df['vol_5'] = df.groupby('Ticker')['return_1d'].rolling(5).std().reset_index(level=0, drop=True)
+    df['vol_10'] = df.groupby('Ticker')['return_1d'].rolling(10).std().reset_index(level=0, drop=True)
+    df['vol_21'] = df.groupby('Ticker')['return_1d'].rolling(21).std().reset_index(level=0, drop=True)
+    return df
+
+# -------------------------------
+# 6. Price range features
+# -------------------------------
+def compute_price_range(df):
+    df['daily_range'] = df['High'] - df['Low']
+    df['range_pct'] = df['daily_range'] / df['Close']
+    return df
+
+# -------------------------------
+# 7. Momentum / trend features
+# -------------------------------
+def compute_momentum(df):
+    df['momentum_5'] = df['Close'] - df['Close'].shift(5)
+    df['momentum_10'] = df['Close'] - df['Close'].shift(10)
+    df['momentum_21'] = df['Close'] - df['Close'].shift(21)
+    
+    df['momentum_5_pct'] = df['Close'].pct_change(5)
+    df['momentum_10_pct'] = df['Close'].pct_change(10)
+    df['momentum_21_pct'] = df['Close'].pct_change(21)
+    
+    # 52-week position
+    df['52w_position'] = (df['Close'] - df['fiftyTwoWeekLow']) / (df['fiftyTwoWeekHigh'] - df['fiftyTwoWeekLow'])
+    
+    # Gap
+    df['gap'] = (df['Open'] - df['previousClose']) / df['previousClose']
+    
+    # Risk-adjusted return
+    df['risk_adjusted_return'] = df['return_5d'] / df['vol_5']
+    
+    return df
+
+# -------------------------------
+# 8. Volume-based features
+# -------------------------------
+def compute_volume_features(df):
+    for window in [5,10,21]:
+        df[f'volume_avg_{window}'] = df.groupby('Ticker')['Volume'].rolling(window).mean().reset_index(level=0, drop=True)
+        df[f'volume_vol_{window}'] = df.groupby('Ticker')['Volume'].rolling(window).std().reset_index(level=0, drop=True)
+        df[f'volume_momentum_{window}'] = df['Volume'] - df.groupby('Ticker')['Volume'].shift(window)
+        df[f'volume_momentum_{window}_pct'] = df['Volume'].pct_change(window)
+    df['volume_price_ratio'] = df['Volume'] / (df['Close'] + 1e-9)
+    return df
+
+# -------------------------------
+# 9. Trend / technical indicators
+# -------------------------------
+def compute_technical_indicators(df):
+    # EMA
+    for span in [5,10,21,12,26]:
+        df[f'ema_{span}'] = df.groupby('Ticker')['Close'].transform(lambda x: x.ewm(span=span, adjust=False).mean())
+    
+    # MACD
+    df['macd'] = df['ema_12'] - df['ema_26']
+    df['macd_signal'] = df.groupby('Ticker')['macd'].transform(lambda x: x.ewm(span=9, adjust=False).mean())
+    
+    # RSI
+    def compute_rsi(series, period=14):
+        delta = series.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(window=period).mean()
+        avg_loss = loss.rolling(window=period).mean()
+        rs = avg_gain / (avg_loss + 1e-9)
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+    
+    df['rsi_14'] = df.groupby('Ticker')['Close'].transform(lambda x: compute_rsi(x, 14))
+    
+    # Price/EMA ratios
+    for span in [5,10,21]:
+        df[f'close_ema{span}_ratio'] = df['Close'] / df[f'ema_{span}']
+    
+    # Volume/MA ratios
+    for window in [5,10,21]:
+        df[f'volume_ma{window}_ratio'] = df['Volume'] / (df[f'volume_avg_{window}'] + 1e-9)
+    
+    return df
+
+# -------------------------------
+# 10. Save features
+# -------------------------------
+def save_features(df, path="data/processed/features_dataset.csv"):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    df.to_csv(path, index=False)
+    print(f"Features dataset saved to {path}")
+
+# -------------------------------
+# Main pipeline
+# -------------------------------
+def main():
+    df = load_master_dataset()
+    df = fill_missing_values(df)
+    df = compute_returns(df)
+    df = compute_moving_averages(df)
+    df = compute_volatility(df)
+    df = compute_price_range(df)
+    df = compute_momentum(df)
+    df = compute_volume_features(df)
+    df = compute_technical_indicators(df)
+    df = df.fillna(0)  # Final cleanup
+    save_features(df)
+
+# -------------------------------
+# Run script
+# -------------------------------
+if __name__ == "__main__":
+    main()
+
+
