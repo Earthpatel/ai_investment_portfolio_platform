@@ -1,0 +1,164 @@
+# ==========================================
+# MODULE 4: MODELING & PREDICTION
+# Linear Regression (Stock Returns Model)
+# ==========================================
+
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+# -------------------------------
+# 1️⃣ CONFIG
+# -------------------------------
+
+TARGET_COL = "return_1d"
+
+FEATURE_COLS = [
+    "Close", "Open", "High", "Low",
+    "ma_5", "ma_10", "ma_21",
+    "ema_5", "ema_10", "ema_21", "ema_12", "ema_26",
+    "price_ma5_ratio", "price_ma10_ratio", "price_ma21_ratio",
+    "momentum_5", "momentum_10", "momentum_21",
+    "momentum_5_pct", "momentum_10_pct", "momentum_21_pct",
+    "vol_5", "vol_10", "vol_21", "range_pct",
+    "volume", "volume_avg_5", "volume_avg_10", "volume_avg_21",
+    "volume_momentum_5", "volume_price_ratio",
+    "rsi_14", "macd", "macd_signal",
+    "risk_adjusted_return",
+    "52w_position"
+]
+
+# -------------------------------
+# 2️⃣ DATA LOADING
+# -------------------------------
+
+def load_data(path):
+    df = pd.read_csv(path, low_memory=False)
+    df.columns = df.columns.str.strip()
+    df["Date"] = pd.to_datetime(df["Date"])
+    return df
+
+# -------------------------------
+# 3️⃣ DATA PREP
+# -------------------------------
+
+def prepare_data(df):
+    df = df.dropna(subset=[TARGET_COL])
+
+    split_date = df["Date"].quantile(0.8)
+
+    train_df = df[df["Date"] <= split_date]
+    test_df = df[df["Date"] > split_date]
+
+    X_train = train_df[FEATURE_COLS]
+    y_train = train_df[TARGET_COL]
+
+    X_test = test_df[FEATURE_COLS]
+    y_test = test_df[TARGET_COL]
+
+    return X_train, X_test, y_train, y_test, test_df
+
+# -------------------------------
+# 4️⃣ MODEL TRAINING
+# -------------------------------
+
+def train_model(X_train, y_train):
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    return model
+
+# -------------------------------
+# 5️⃣ EVALUATION
+# -------------------------------
+
+def evaluate_model(model, X_test, y_test):
+    y_pred = model.predict(X_test)
+
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    print("\n📊 MODEL PERFORMANCE")
+    print("RMSE:", rmse)
+    print("MAE :", mae)
+    print("R²  :", r2)
+
+    return y_pred
+
+# -------------------------------
+# 6️⃣ FEATURE IMPORTANCE
+# -------------------------------
+
+def feature_importance(model):
+    coef_df = pd.DataFrame({
+        "Feature": FEATURE_COLS,
+        "Coefficient": model.coef_
+    }).sort_values(by="Coefficient", ascending=False)
+
+    print("\n📈 TOP POSITIVE DRIVERS:")
+    print(coef_df.head(10))
+
+    print("\n📉 TOP NEGATIVE DRIVERS:")
+    print(coef_df.tail(10))
+
+    print("\nIntercept:", model.intercept_)
+
+# -------------------------------
+# 7️⃣ BACKTESTING
+# -------------------------------
+
+def backtest(test_df, y_pred):
+    test_df = test_df.copy()
+
+    test_df["Predicted_Return"] = y_pred
+    test_df["Signal"] = (test_df["Predicted_Return"] > 0).astype(int)
+
+    test_df["Strategy_Return"] = test_df["Signal"] * test_df[TARGET_COL]
+
+    test_df["Cumulative_Market"] = (1 + test_df[TARGET_COL]).cumprod()
+    test_df["Cumulative_Strategy"] = (1 + test_df["Strategy_Return"]).cumprod()
+
+    print("\n📊 STRATEGY VS MARKET")
+    print(test_df[["Cumulative_Market", "Cumulative_Strategy"]].tail())
+
+    return test_df
+
+# -------------------------------
+# 8️⃣ SAVE OUTPUT
+# -------------------------------
+
+def save_results(test_df, path="data/processed/linear_model_predictions.csv"):
+    test_df.to_csv(path, index=False)
+    print(f"\nSaved predictions to: {path}")
+
+# -------------------------------
+# 9️⃣ MAIN
+# -------------------------------
+
+def main():
+    data_path = "data/processed/features_dataset.csv"
+
+    df = load_data(data_path)
+
+    X_train, X_test, y_train, y_test, test_df = prepare_data(df)
+
+    model = train_model(X_train, y_train)
+
+    y_pred = evaluate_model(model, X_test, y_test)
+
+    feature_importance(model)
+
+    test_df = backtest(test_df, y_pred)
+
+    save_results(test_df)
+
+    print("\nDONE")
+
+# -------------------------------
+# RUN
+# -------------------------------
+
+if __name__ == "__main__":
+    main()
+    
