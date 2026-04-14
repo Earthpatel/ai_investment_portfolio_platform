@@ -202,7 +202,6 @@ def save_features(df, path="data/processed/features_dataset.csv"):
     '52w_position',
     'gap',
     'risk_adjusted_return',
-    'volume',
     'volume_avg_5',
     'volume_vol_5',
     'volume_momentum_5',
