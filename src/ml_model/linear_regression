@@ -186,7 +186,20 @@ def backtest(test_df, y_pred):
 # -------------------------------
 
 def save_results(test_df, path="data/processed/linear_model_predictions.csv"):
-    test_df.to_csv(path, index=False)
+    final_df = test_df[[
+    "Ticker",
+    "Date",
+    "return_1d",
+    "Predicted_Return",
+    "Signal",
+    "Strategy_Return",
+    "Cumulative_Market",
+    "Cumulative_Strategy",
+    "Drawdown",
+    "Sharpe_21",
+    "Volatility_21"
+    ]].copy()
+    final_df.to_csv(path, index=False)
     print(f"\nSaved predictions to: {path}")
 
 # -------------------------------
