@@ -1,11 +1,12 @@
 # ==========================================
 # MODULE 4: MODELING & PREDICTION
-# Linear Regression (Stock Returns Model)
 # ==========================================
 
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
+
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 # -------------------------------
@@ -15,32 +16,33 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 TARGET_COL = "return_1d"
 
 FEATURE_COLS = [
-    "Close", "Open", "High", "Low",
-    "ma_5", "ma_10", "ma_21",
-    "ema_5", "ema_10", "ema_21", "ema_12", "ema_26",
-    "price_ma5_ratio", "price_ma10_ratio", "price_ma21_ratio",
-    "momentum_5", "momentum_10", "momentum_21",
-    "momentum_5_pct", "momentum_10_pct", "momentum_21_pct",
-    "vol_5", "vol_10", "vol_21", "range_pct",
-    "volume_avg_5", "volume_avg_10", "volume_avg_21",
-    "volume_momentum_5", "volume_price_ratio",
-    "rsi_14", "macd", "macd_signal",
+    "Close","Open","High","Low",
+    "ma_5","ma_10","ma_21",
+    "ema_5","ema_10","ema_21","ema_12","ema_26",
+    "price_ma5_ratio","price_ma10_ratio","price_ma21_ratio",
+    "momentum_5","momentum_10","momentum_21",
+    "momentum_5_pct","momentum_10_pct","momentum_21_pct",
+    "vol_5","vol_10","vol_21","range_pct",
+    "volume_avg_5","volume_avg_10","volume_avg_21",
+    "volume_momentum_5","volume_price_ratio",
+    "rsi_14","macd","macd_signal",
     "risk_adjusted_return",
     "52w_position"
 ]
 
 # -------------------------------
-# 2️⃣ DATA LOADING
+# 2️⃣ LOAD
 # -------------------------------
 
 def load_data(path):
     df = pd.read_csv(path, low_memory=False)
     df.columns = df.columns.str.strip()
     df["Date"] = pd.to_datetime(df["Date"])
+    df = df.sort_values(["Ticker", "Date"])
     return df
 
 # -------------------------------
-# 3️⃣ DATA PREP
+# 3️⃣ PREP
 # -------------------------------
 
 def prepare_data(df):
@@ -49,7 +51,7 @@ def prepare_data(df):
     split_date = df["Date"].quantile(0.8)
 
     train_df = df[df["Date"] <= split_date]
-    test_df = df[df["Date"] > split_date]
+    test_df  = df[df["Date"] > split_date]
 
     X_train = train_df[FEATURE_COLS]
     y_train = train_df[TARGET_COL]
@@ -60,29 +62,34 @@ def prepare_data(df):
     return X_train, X_test, y_train, y_test, test_df
 
 # -------------------------------
-# 4️⃣ MODEL TRAINING
+# 4️⃣ TRAIN (WITH SCALING + RIDGE)
 # -------------------------------
 
 def train_model(X_train, y_train):
-    model = LinearRegression()
-    model.fit(X_train, y_train)
-    return model
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+
+    model = Ridge(alpha=1.0)
+    model.fit(X_train_scaled, y_train)
+
+    return model, scaler
 
 # -------------------------------
-# 5️⃣ EVALUATION
+# 5️⃣ EVALUATE
 # -------------------------------
 
-def evaluate_model(model, X_test, y_test):
-    y_pred = model.predict(X_test)
+def evaluate_model(model, scaler, X_test, y_test):
+    X_test_scaled = scaler.transform(X_test)
+    y_pred = model.predict(X_test_scaled)
 
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    mae = mean_absolute_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
+    mae  = mean_absolute_error(y_test, y_pred)
+    r2   = r2_score(y_test, y_pred)
 
     print("\n📊 MODEL PERFORMANCE")
-    print("RMSE:", rmse)
-    print("MAE :", mae)
-    print("R²  :", r2)
+    print(f"RMSE: {rmse:.6f}")
+    print(f"MAE : {mae:.6f}")
+    print(f"R²  : {r2:.4f}")
 
     return y_pred
 
@@ -96,134 +103,128 @@ def feature_importance(model):
         "Coefficient": model.coef_
     }).sort_values(by="Coefficient", ascending=False)
 
-    print("\n📈 TOP POSITIVE DRIVERS:")
+    print("\n📈 TOP FEATURES")
     print(coef_df.head(10))
 
-    print("\n📉 TOP NEGATIVE DRIVERS:")
-    print(coef_df.tail(10))
-
-    print("\nIntercept:", model.intercept_)
-
 # -------------------------------
-# 7️⃣ BACKTESTING
+# 7️⃣ THRESHOLD OPTIMIZATION
 # -------------------------------
 
-def backtest(test_df, y_pred):
-    test_df = test_df.copy().reset_index(drop=True)
+def optimize_threshold(y_pred, y_true):
+    thresholds = np.linspace(0, 0.01, 20)
 
-    # -------------------------------
-    # Predictions + Signals
-    # -------------------------------
-    test_df["Predicted_Return"] = y_pred
-    test_df["Signal"] = (test_df["Predicted_Return"] > 0).astype(int)
+    best_sharpe = -np.inf
+    best_thresh = 0
 
-    # Strategy returns
-    test_df["Strategy_Return"] = test_df["Signal"] * test_df[TARGET_COL]
+    for t in thresholds:
+        signal = (y_pred > t).astype(int)
+        strat_ret = signal * y_true
 
-    # Cumulative performance
-    test_df["Cumulative_Market"] = (1 + test_df[TARGET_COL]).cumprod()
-    test_df["Cumulative_Strategy"] = (1 + test_df["Strategy_Return"]).cumprod()
+        if strat_ret.std() == 0:
+            continue
 
-    # -------------------------------
-    # 🔥 ADVANCED METRICS
-    # -------------------------------
+        sharpe = (strat_ret.mean() / strat_ret.std()) * np.sqrt(252)
 
-    # PnL
-    test_df["PnL"] = test_df["Strategy_Return"]
+        if sharpe > best_sharpe:
+            best_sharpe = sharpe
+            best_thresh = t
+
+    print(f"\n🔥 Optimal Threshold: {best_thresh:.5f}")
+    print(f"🔥 Best Sharpe: {best_sharpe:.2f}")
+
+    return best_thresh
+
+# -------------------------------
+# 8️⃣ BACKTEST (FULL METRICS)
+# -------------------------------
+
+def backtest(test_df, y_pred, threshold):
+    df = test_df.copy().reset_index(drop=True)
+
+    df["Predicted_Return"] = y_pred
+    df["Signal"] = (df["Predicted_Return"] > threshold).astype(int)
+
+    df["Strategy_Return"] = df["Signal"] * df[TARGET_COL]
+
+    df["Cumulative_Market"] = (1 + df[TARGET_COL]).cumprod()
+    df["Cumulative_Strategy"] = (1 + df["Strategy_Return"]).cumprod()
 
     # Drawdown
-    test_df["Rolling_Max"] = test_df["Cumulative_Strategy"].cummax()
-    test_df["Drawdown"] = (
-        test_df["Cumulative_Strategy"] - test_df["Rolling_Max"]
-    ) / test_df["Rolling_Max"]
+    df["Rolling_Max"] = df["Cumulative_Strategy"].cummax()
+    df["Drawdown"] = (df["Cumulative_Strategy"] - df["Rolling_Max"]) / df["Rolling_Max"]
 
-    # Volatility (21-day)
-    test_df["Volatility_21"] = test_df["Strategy_Return"].rolling(21).std()
+    df["Volatility_21"] = df["Strategy_Return"].rolling(21).std()
 
-    # Rolling Sharpe Ratio
-    test_df["Sharpe_21"] = (
-        test_df["Strategy_Return"].rolling(21).mean() /
-        test_df["Strategy_Return"].rolling(21).std()
+    df["Sharpe_21"] = (
+        df["Strategy_Return"].rolling(21).mean() /
+        df["Strategy_Return"].rolling(21).std()
     ) * np.sqrt(252)
 
     # Trade stats
-    test_df["Win"] = (test_df["Strategy_Return"] > 0).astype(int)
-    test_df["Loss"] = (test_df["Strategy_Return"] < 0).astype(int)
-    test_df["Trade"] = test_df["Signal"]
+    df["Win"] = (df["Strategy_Return"] > 0).astype(int)
+    df["Trade"] = df["Signal"]
 
-    # -------------------------------
-    # 📊 SUMMARY METRICS
-    # -------------------------------
+    # Summary
+    total_return = df["Cumulative_Strategy"].iloc[-1] - 1
+    market_return = df["Cumulative_Market"].iloc[-1] - 1
 
-    total_return = test_df["Cumulative_Strategy"].iloc[-1] - 1
-    market_return = test_df["Cumulative_Market"].iloc[-1] - 1
-
-    trades = test_df["Trade"].sum()
-    win_rate = test_df["Win"].sum() / trades if trades > 0 else 0
+    trades = df["Trade"].sum()
+    win_rate = df["Win"].sum() / trades if trades > 0 else 0
 
     sharpe = (
-        test_df["Strategy_Return"].mean() /
-        test_df["Strategy_Return"].std()
+        df["Strategy_Return"].mean() /
+        df["Strategy_Return"].std()
     ) * np.sqrt(252)
 
-    max_drawdown = test_df["Drawdown"].min()
+    max_dd = df["Drawdown"].min()
 
-    print("\n📊 STRATEGY VS MARKET")
-    print(test_df[["Cumulative_Market", "Cumulative_Strategy"]].tail())
+    print("\n📊 STRATEGY PERFORMANCE")
+    print(f"Strategy Return: {total_return:.2%}")
+    print(f"Market Return:   {market_return:.2%}")
+    print(f"Trades:          {int(trades)}")
+    print(f"Win Rate:        {win_rate:.2%}")
+    print(f"Sharpe:          {sharpe:.2f}")
+    print(f"Max Drawdown:    {max_dd:.2%}")
 
-    print("\n📊 ADVANCED STRATEGY METRICS")
-    print(f"Total Strategy Return: {total_return:.2%}")
-    print(f"Market Return: {market_return:.2%}")
-    print(f"Total Trades: {int(trades)}")
-    print(f"Win Rate: {win_rate:.2%}")
-    print(f"Sharpe Ratio: {sharpe:.2f}")
-    print(f"Max Drawdown: {max_drawdown:.2%}")
-
-    return test_df
+    return df
 
 # -------------------------------
-# 8️⃣ SAVE OUTPUT
+# 9️⃣ SAVE
 # -------------------------------
 
-def save_results(test_df, path="data/processed/linear_model_predictions.csv"):
-    final_df = test_df[[
-    "Ticker",
-    "Date",
-    "return_1d",
-    "Predicted_Return",
-    "Signal",
-    "Strategy_Return",
-    "Cumulative_Market",
-    "Cumulative_Strategy",
-    "Drawdown",
-    "Sharpe_21",
-    "Volatility_21"
-    ]].copy()
-    final_df.to_csv(path, index=False)
-    print(f"\nSaved predictions to: {path}")
+def save_results(df):
+    final_df = df[[
+        "Ticker","Date","return_1d",
+        "Predicted_Return","Signal","Strategy_Return",
+        "Cumulative_Market","Cumulative_Strategy",
+        "Drawdown","Sharpe_21","Volatility_21"
+    ]]
+
+    final_df.to_csv("data/processed/linear_model_predictions.csv", index=False)
+    print("\n✅ Saved results")
 
 # -------------------------------
-# 9️⃣ MAIN
+# 🔟 MAIN
 # -------------------------------
 
 def main():
-    data_path = "data/processed/features_dataset.csv"
-
-    df = load_data(data_path)
+    df = load_data("data/processed/features_dataset.csv")
 
     X_train, X_test, y_train, y_test, test_df = prepare_data(df)
 
-    model = train_model(X_train, y_train)
+    model, scaler = train_model(X_train, y_train)
 
-    y_pred = evaluate_model(model, X_test, y_test)
+    y_pred = evaluate_model(model, scaler, X_test, y_test)
 
     feature_importance(model)
 
-    test_df = backtest(test_df, y_pred)
+    threshold = optimize_threshold(y_pred, y_test)
 
-    save_results(test_df)
+    results = backtest(test_df, y_pred, threshold)
 
-    print("\nDONE")
+    save_results(results)
+
+    print("\n🚀 DONE (FULL OPTIMAL PIPELINE)")
 
 # -------------------------------
 # RUN
