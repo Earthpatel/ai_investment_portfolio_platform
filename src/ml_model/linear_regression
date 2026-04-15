@@ -22,7 +22,7 @@ FEATURE_COLS = [
     "momentum_5", "momentum_10", "momentum_21",
     "momentum_5_pct", "momentum_10_pct", "momentum_21_pct",
     "vol_5", "vol_10", "vol_21", "range_pct",
-    "volume", "volume_avg_5", "volume_avg_10", "volume_avg_21",
+    "volume_avg_5", "volume_avg_10", "volume_avg_21",
     "volume_momentum_5", "volume_price_ratio",
     "rsi_14", "macd", "macd_signal",
     "risk_adjusted_return",
@@ -109,18 +109,75 @@ def feature_importance(model):
 # -------------------------------
 
 def backtest(test_df, y_pred):
-    test_df = test_df.copy()
+    test_df = test_df.copy().reset_index(drop=True)
 
+    # -------------------------------
+    # Predictions + Signals
+    # -------------------------------
     test_df["Predicted_Return"] = y_pred
     test_df["Signal"] = (test_df["Predicted_Return"] > 0).astype(int)
 
+    # Strategy returns
     test_df["Strategy_Return"] = test_df["Signal"] * test_df[TARGET_COL]
 
+    # Cumulative performance
     test_df["Cumulative_Market"] = (1 + test_df[TARGET_COL]).cumprod()
     test_df["Cumulative_Strategy"] = (1 + test_df["Strategy_Return"]).cumprod()
 
+    # -------------------------------
+    # 🔥 ADVANCED METRICS
+    # -------------------------------
+
+    # PnL
+    test_df["PnL"] = test_df["Strategy_Return"]
+
+    # Drawdown
+    test_df["Rolling_Max"] = test_df["Cumulative_Strategy"].cummax()
+    test_df["Drawdown"] = (
+        test_df["Cumulative_Strategy"] - test_df["Rolling_Max"]
+    ) / test_df["Rolling_Max"]
+
+    # Volatility (21-day)
+    test_df["Volatility_21"] = test_df["Strategy_Return"].rolling(21).std()
+
+    # Rolling Sharpe Ratio
+    test_df["Sharpe_21"] = (
+        test_df["Strategy_Return"].rolling(21).mean() /
+        test_df["Strategy_Return"].rolling(21).std()
+    ) * np.sqrt(252)
+
+    # Trade stats
+    test_df["Win"] = (test_df["Strategy_Return"] > 0).astype(int)
+    test_df["Loss"] = (test_df["Strategy_Return"] < 0).astype(int)
+    test_df["Trade"] = test_df["Signal"]
+
+    # -------------------------------
+    # 📊 SUMMARY METRICS
+    # -------------------------------
+
+    total_return = test_df["Cumulative_Strategy"].iloc[-1] - 1
+    market_return = test_df["Cumulative_Market"].iloc[-1] - 1
+
+    trades = test_df["Trade"].sum()
+    win_rate = test_df["Win"].sum() / trades if trades > 0 else 0
+
+    sharpe = (
+        test_df["Strategy_Return"].mean() /
+        test_df["Strategy_Return"].std()
+    ) * np.sqrt(252)
+
+    max_drawdown = test_df["Drawdown"].min()
+
     print("\n📊 STRATEGY VS MARKET")
     print(test_df[["Cumulative_Market", "Cumulative_Strategy"]].tail())
+
+    print("\n📊 ADVANCED STRATEGY METRICS")
+    print(f"Total Strategy Return: {total_return:.2%}")
+    print(f"Market Return: {market_return:.2%}")
+    print(f"Total Trades: {int(trades)}")
+    print(f"Win Rate: {win_rate:.2%}")
+    print(f"Sharpe Ratio: {sharpe:.2f}")
+    print(f"Max Drawdown: {max_drawdown:.2%}")
 
     return test_df
 
@@ -161,4 +218,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
