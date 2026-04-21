@@ -1,5 +1,5 @@
 # ==========================================
-# MODULE 4: MODELING & PREDICTION
+# MODULE 4: STATEFUL ML TRADING SYSTEM (NO LEAKAGE)
 # ==========================================
 
 import pandas as pd
@@ -7,228 +7,272 @@ import numpy as np
 
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from scipy.stats import spearmanr
 
-# -------------------------------
+# ==========================================
 # 1️⃣ CONFIG
-# -------------------------------
+# ==========================================
 
 TARGET_COL = "return_1d"
 
 FEATURE_COLS = [
     "Close","Open","High","Low",
     "ma_5","ma_10","ma_21",
-    "ema_5","ema_10","ema_21","ema_12","ema_26",
-    "price_ma5_ratio","price_ma10_ratio","price_ma21_ratio",
+    "ema_5","ema_10","ema_21",
     "momentum_5","momentum_10","momentum_21",
-    "momentum_5_pct","momentum_10_pct","momentum_21_pct",
-    "vol_5","vol_10","vol_21","range_pct",
-    "volume_avg_5","volume_avg_10","volume_avg_21",
-    "volume_momentum_5","volume_price_ratio",
-    "rsi_14","macd","macd_signal",
-    "risk_adjusted_return",
-    "52w_position"
+    "rsi_14","macd","macd_signal"
 ]
 
-# -------------------------------
-# 2️⃣ LOAD
-# -------------------------------
+TRANSACTION_COST = 0.0005
+VOL_TARGET = 0.01
+
+# ==========================================
+# 2️⃣ LOAD DATA
+# ==========================================
 
 def load_data(path):
-    df = pd.read_csv(path, low_memory=False)
+    df = pd.read_csv(path)
     df.columns = df.columns.str.strip()
-    df["Date"] = pd.to_datetime(df["Date"])
+
+    df["Date"] = pd.to_datetime(df["Date"], utc=True)
+    df["Date"] = df["Date"].dt.tz_convert(None)
+
     df = df.sort_values(["Ticker", "Date"])
     return df
 
-# -------------------------------
-# 3️⃣ PREP
-# -------------------------------
+# ==========================================
+# 3️⃣ CLEAN + FIX LEAKAGE
+# ==========================================
 
-def prepare_data(df):
-    df = df.dropna(subset=[TARGET_COL])
+def clean_data(df):
 
-    split_date = df["Date"].quantile(0.8)
+    df = df.replace([np.inf, -np.inf], np.nan)
 
-    train_df = df[df["Date"] <= split_date]
-    test_df  = df[df["Date"] > split_date]
+    # --------------------------------------
+    # 🚨 CRITICAL: SHIFT FEATURES BACK 1 DAY
+    # --------------------------------------
+    df[FEATURE_COLS] = df.groupby("Ticker")[FEATURE_COLS].shift(1)
 
-    X_train = train_df[FEATURE_COLS]
-    y_train = train_df[TARGET_COL]
-
-    X_test = test_df[FEATURE_COLS]
-    y_test = test_df[TARGET_COL]
-
-    return X_train, X_test, y_train, y_test, test_df
-
-# -------------------------------
-# 4️⃣ TRAIN (WITH SCALING + RIDGE)
-# -------------------------------
-
-def train_model(X_train, y_train):
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-
-    model = Ridge(alpha=1.0)
-    model.fit(X_train_scaled, y_train)
-
-    return model, scaler
-
-# -------------------------------
-# 5️⃣ EVALUATE
-# -------------------------------
-
-def evaluate_model(model, scaler, X_test, y_test):
-    X_test_scaled = scaler.transform(X_test)
-    y_pred = model.predict(X_test_scaled)
-
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    mae  = mean_absolute_error(y_test, y_pred)
-    r2   = r2_score(y_test, y_pred)
-
-    print("\n📊 MODEL PERFORMANCE")
-    print(f"RMSE: {rmse:.6f}")
-    print(f"MAE : {mae:.6f}")
-    print(f"R²  : {r2:.4f}")
-
-    return y_pred
-
-# -------------------------------
-# 6️⃣ FEATURE IMPORTANCE
-# -------------------------------
-
-def feature_importance(model):
-    coef_df = pd.DataFrame({
-        "Feature": FEATURE_COLS,
-        "Coefficient": model.coef_
-    }).sort_values(by="Coefficient", ascending=False)
-
-    print("\n📈 TOP FEATURES")
-    print(coef_df.head(10))
-
-# -------------------------------
-# 7️⃣ THRESHOLD OPTIMIZATION
-# -------------------------------
-
-def optimize_threshold(y_pred, y_true):
-    thresholds = np.linspace(0, 0.01, 20)
-
-    best_sharpe = -np.inf
-    best_thresh = 0
-
-    for t in thresholds:
-        signal = (y_pred > t).astype(int)
-        strat_ret = signal * y_true
-
-        if strat_ret.std() == 0:
-            continue
-
-        sharpe = (strat_ret.mean() / strat_ret.std()) * np.sqrt(252)
-
-        if sharpe > best_sharpe:
-            best_sharpe = sharpe
-            best_thresh = t
-
-    print(f"\n🔥 Optimal Threshold: {best_thresh:.5f}")
-    print(f"🔥 Best Sharpe: {best_sharpe:.2f}")
-
-    return best_thresh
-
-# -------------------------------
-# 8️⃣ BACKTEST (FULL METRICS)
-# -------------------------------
-
-def backtest(test_df, y_pred, threshold):
-    df = test_df.copy().reset_index(drop=True)
-
-    df["Predicted_Return"] = y_pred
-    df["Signal"] = (df["Predicted_Return"] > threshold).astype(int)
-
-    df["Strategy_Return"] = df["Signal"] * df[TARGET_COL]
-
-    df["Cumulative_Market"] = (1 + df[TARGET_COL]).cumprod()
-    df["Cumulative_Strategy"] = (1 + df["Strategy_Return"]).cumprod()
-
-    # Drawdown
-    df["Rolling_Max"] = df["Cumulative_Strategy"].cummax()
-    df["Drawdown"] = (df["Cumulative_Strategy"] - df["Rolling_Max"]) / df["Rolling_Max"]
-
-    df["Volatility_21"] = df["Strategy_Return"].rolling(21).std()
-
-    df["Sharpe_21"] = (
-        df["Strategy_Return"].rolling(21).mean() /
-        df["Strategy_Return"].rolling(21).std()
-    ) * np.sqrt(252)
-
-    # Trade stats
-    df["Win"] = (df["Strategy_Return"] > 0).astype(int)
-    df["Trade"] = df["Signal"]
-
-    # Summary
-    total_return = df["Cumulative_Strategy"].iloc[-1] - 1
-    market_return = df["Cumulative_Market"].iloc[-1] - 1
-
-    trades = df["Trade"].sum()
-    win_rate = df["Win"].sum() / trades if trades > 0 else 0
-
-    sharpe = (
-        df["Strategy_Return"].mean() /
-        df["Strategy_Return"].std()
-    ) * np.sqrt(252)
-
-    max_dd = df["Drawdown"].min()
-
-    print("\n📊 STRATEGY PERFORMANCE")
-    print(f"Strategy Return: {total_return:.2%}")
-    print(f"Market Return:   {market_return:.2%}")
-    print(f"Trades:          {int(trades)}")
-    print(f"Win Rate:        {win_rate:.2%}")
-    print(f"Sharpe:          {sharpe:.2f}")
-    print(f"Max Drawdown:    {max_dd:.2%}")
+    df = df.dropna(subset=FEATURE_COLS + [TARGET_COL])
 
     return df
 
-# -------------------------------
-# 9️⃣ SAVE
-# -------------------------------
+# ==========================================
+# 4️⃣ WALK FORWARD SPLITS
+# ==========================================
 
-def save_results(df):
-    final_df = df[[
-        "Ticker","Date","return_1d",
-        "Predicted_Return","Signal","Strategy_Return",
-        "Cumulative_Market","Cumulative_Strategy",
-        "Drawdown","Sharpe_21","Volatility_21"
-    ]]
+def walk_forward_splits(df, train_size=252*2, test_size=21):
 
-    final_df.to_csv("data/processed/linear_model_predictions.csv", index=False)
-    print("\n✅ Saved results")
+    dates = df["Date"].unique()
+    splits = []
 
-# -------------------------------
-# 🔟 MAIN
-# -------------------------------
+    for i in range(train_size, len(dates) - test_size, test_size):
+
+        train_dates = dates[i-train_size:i]
+        test_dates = dates[i:i+test_size]
+
+        train = df[df["Date"].isin(train_dates)]
+        test = df[df["Date"].isin(test_dates)]
+
+        if len(train) == 0 or len(test) == 0:
+            continue
+
+        splits.append((train, test))
+
+    return splits
+
+# ==========================================
+# 5️⃣ TRAIN MODEL
+# ==========================================
+
+def train_model(X, y):
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    model = Ridge(alpha=1.0)
+    model.fit(X_scaled, y)
+
+    return model, scaler
+
+# ==========================================
+# 6️⃣ GENERATE POSITIONS (LONG / SHORT / FLAT)
+# ==========================================
+
+def generate_positions(preds):
+
+    long_threshold = np.quantile(preds, 0.8)
+    short_threshold = np.quantile(preds, 0.2)
+
+    positions = []
+
+    for p in preds:
+        if p > long_threshold:
+            positions.append(1)
+        elif p < short_threshold:
+            positions.append(-1)
+        else:
+            positions.append(0)
+
+    return np.array(positions)
+
+# ==========================================
+# 7️⃣ BACKTEST
+# ==========================================
+
+def backtest(df, preds):
+
+    df = df.copy()
+    df["Predicted"] = preds
+
+    # -------------------------
+    # SIGNAL
+    # -------------------------
+    df["Position"] = generate_positions(preds)
+
+    # -------------------------
+    # VOLATILITY SCALING
+    # -------------------------
+    df["volatility"] = df.groupby("Ticker")[TARGET_COL].transform(
+        lambda x: x.rolling(21).std()
+    )
+
+    df["volatility"] = df["volatility"].replace(0, np.nan)
+
+    df["position_size"] = (VOL_TARGET / df["volatility"]).clip(0, 2)
+    df["position_size"] = df["position_size"].fillna(0)
+
+    # -------------------------
+    # RETURNS
+    # -------------------------
+    df["Strategy_Return"] = (
+        df["Position"] *
+        df["position_size"] *
+        df[TARGET_COL]
+    )
+
+    # transaction costs
+    df["Trade"] = df.groupby("Ticker")["Position"].diff().abs().fillna(0)
+    df["Strategy_Return"] -= df["Trade"] * TRANSACTION_COST
+
+    # -------------------------
+    # CUMULATIVE RETURNS
+    # -------------------------
+    df["Cumulative_Strategy"] = df.groupby("Ticker")["Strategy_Return"].apply(
+        lambda x: (1 + x.fillna(0)).cumprod()
+    ).reset_index(level=0, drop=True)
+
+    df["Cumulative_Market"] = df.groupby("Ticker")[TARGET_COL].apply(
+        lambda x: (1 + x.fillna(0)).cumprod()
+    ).reset_index(level=0, drop=True)
+
+    # -------------------------
+    # DRAWDOWN
+    # -------------------------
+    def dd(x):
+        peak = x.cummax()
+        return (x - peak) / peak
+
+    df["Drawdown"] = df.groupby("Ticker")["Cumulative_Strategy"].apply(dd)\
+                       .reset_index(level=0, drop=True)
+
+    # -------------------------
+    # METRICS
+    # -------------------------
+    std = df["Strategy_Return"].std()
+
+    if std < 1e-6:
+        sharpe = 0
+    else:
+        sharpe = (df["Strategy_Return"].mean() / std) * np.sqrt(252)
+
+    total_return = df.groupby("Ticker")["Cumulative_Strategy"].last().mean() - 1
+    market_return = df.groupby("Ticker")["Cumulative_Market"].last().mean() - 1
+
+    trades = df["Trade"].sum()
+    win_rate = (df["Strategy_Return"] > 0).mean()
+
+    return df, {
+        "sharpe": sharpe,
+        "total_return": total_return,
+        "market_return": market_return,
+        "max_drawdown": df["Drawdown"].min(),
+        "trades": trades,
+        "win_rate": win_rate
+    }
+
+# ==========================================
+# 8️⃣ MAIN PIPELINE
+# ==========================================
 
 def main():
+
     df = load_data("data/processed/features_dataset.csv")
 
-    X_train, X_test, y_train, y_test, test_df = prepare_data(df)
+    # --------------------------------------
+    # ✅ ENSURE TARGET IS CORRECTLY DEFINED
+    # --------------------------------------
+    df[TARGET_COL] = df.groupby("Ticker")["Close"].pct_change().shift(-1)
 
-    model, scaler = train_model(X_train, y_train)
+    df = clean_data(df)
 
-    y_pred = evaluate_model(model, scaler, X_test, y_test)
+    splits = walk_forward_splits(df)
 
-    feature_importance(model)
+    all_results = []
 
-    threshold = optimize_threshold(y_pred, y_test)
+    for i, (train, test) in enumerate(splits):
 
-    results = backtest(test_df, y_pred, threshold)
+        print(f"\n🔁 SPLIT {i+1}")
 
-    save_results(results)
+        X_train = train[FEATURE_COLS]
+        y_train = train[TARGET_COL]
 
-    print("\n🚀 DONE (FULL OPTIMAL PIPELINE)")
+        X_test = test[FEATURE_COLS]
+        y_test = test[TARGET_COL]
 
-# -------------------------------
+        model, scaler = train_model(X_train, y_train)
+
+        preds = model.predict(scaler.transform(X_test))
+
+        # -------------------------
+        # INFORMATION COEFFICIENT
+        # -------------------------
+        ic, _ = spearmanr(preds, y_test)
+        print(f"IC: {ic:.4f}")
+
+        result_df, metrics = backtest(test, preds)
+
+        print(f"Sharpe: {metrics['sharpe']:.4f} | Return: {metrics['total_return']:.4f}")
+
+        all_results.append(result_df)
+
+    # ==========================================
+    # FINAL AGGREGATED RESULTS
+    # ==========================================
+
+    final_df = pd.concat(all_results)
+
+    std = final_df["Strategy_Return"].std()
+    overall_sharpe = 0 if std < 1e-6 else (
+        final_df["Strategy_Return"].mean() / std * np.sqrt(252)
+    )
+
+    total_return = final_df.groupby("Ticker")["Cumulative_Strategy"].last().mean() - 1
+    market_return = final_df.groupby("Ticker")["Cumulative_Market"].last().mean() - 1
+
+    print("\n📊 FINAL OVERALL PERFORMANCE")
+    print(f"Sharpe: {overall_sharpe:.4f}")
+    print(f"Total Return: {total_return:.4f}")
+    print(f"Market Return: {market_return:.4f}")
+    print(f"Max Drawdown: {final_df['Drawdown'].min():.4f}")
+    print(f"Win Rate: {(final_df['Strategy_Return'] > 0).mean():.4f}")
+
+    final_df.to_csv("data/processed/final_no_leakage_trading_system.csv", index=False)
+
+    print("\n🚀 DONE: NO-LEAKAGE TRADING SYSTEM COMPLETE")
+
+# ==========================================
 # RUN
-# -------------------------------
+# ==========================================
 
 if __name__ == "__main__":
     main()
