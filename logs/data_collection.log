@@ -1,0 +1,69 @@
+2026-06-09 13:11:23,259 | INFO | Config loaded. Date range: 2020-01-01 → 2025-01-01
+2026-06-09 13:11:31,787 | INFO | Loaded 503 tickers.
+2026-06-09 13:11:53,227 | INFO | History batch 1/11 — tickers 0–49
+2026-06-09 13:12:03,738 | INFO | History batch 2/11 — tickers 50–99
+2026-06-09 13:12:15,586 | INFO | History batch 3/11 — tickers 100–149
+2026-06-09 13:12:26,289 | INFO | History batch 4/11 — tickers 150–199
+2026-06-09 13:12:38,296 | INFO | History batch 5/11 — tickers 200–249
+2026-06-09 13:12:40,511 | WARNING | GEV: only 193 rows — skipping (< 200)
+2026-06-09 13:12:43,954 | ERROR | $HOLX: possibly delisted; no price data found  (1d 2020-01-01 -> 2025-01-01) (Yahoo error = "No data found, symbol may be delisted")
+2026-06-09 13:12:43,956 | WARNING | No history data returned for HOLX
+2026-06-09 13:12:48,666 | INFO | History batch 6/11 — tickers 250–299
+2026-06-09 13:12:59,219 | INFO | History batch 7/11 — tickers 300–349
+2026-06-09 13:13:09,982 | INFO | History batch 8/11 — tickers 350–399
+2026-06-09 13:13:16,331 | ERROR | $Q: possibly delisted; no price data found  (1d 2020-01-01 -> 2025-01-01) (Yahoo error = "Data doesn't exist for startDate = 1577854800, endDate = 1735707600")
+2026-06-09 13:13:16,335 | WARNING | No history data returned for Q
+2026-06-09 13:13:21,239 | INFO | History batch 9/11 — tickers 400–449
+2026-06-09 13:13:22,331 | ERROR | $SNDK: possibly delisted; no price data found  (1d 2020-01-01 -> 2025-01-01) (Yahoo error = "Data doesn't exist for startDate = 1577854800, endDate = 1735707600")
+2026-06-09 13:13:22,334 | WARNING | No history data returned for SNDK
+2026-06-09 13:13:24,478 | WARNING | SOLV: only 194 rows — skipping (< 200)
+2026-06-09 13:13:31,728 | INFO | History batch 10/11 — tickers 450–499
+2026-06-09 13:13:43,259 | INFO | History batch 11/11 — tickers 500–502
+2026-06-09 13:13:44,393 | INFO | History fetch complete. Shape: (621349, 7)
+2026-06-09 13:13:44,394 | INFO | Failed tickers: ['GEV', 'HOLX', 'Q', 'SNDK', 'SOLV']
+2026-06-09 13:14:08,618 | INFO | Info batch 1/11
+2026-06-09 13:14:23,752 | INFO | Info batch 2/11
+2026-06-09 13:14:38,664 | INFO | Info batch 3/11
+2026-06-09 13:14:53,901 | INFO | Info batch 4/11
+2026-06-09 13:15:08,631 | INFO | Info batch 5/11
+2026-06-09 13:15:23,816 | INFO | Info batch 6/11
+2026-06-09 13:15:39,343 | INFO | Info batch 7/11
+2026-06-09 13:15:53,959 | INFO | Info batch 8/11
+2026-06-09 13:16:09,036 | INFO | Info batch 9/11
+2026-06-09 13:16:23,802 | INFO | Info batch 10/11
+2026-06-09 13:16:38,646 | INFO | Info batch 11/11
+2026-06-09 13:16:39,375 | INFO | Info fetch complete. Shape: (503, 31)
+2026-06-09 13:17:45,077 | INFO | Financials batch 1/11
+2026-06-09 13:17:57,654 | INFO | Financials batch 2/11
+2026-06-09 13:18:10,359 | INFO | Financials batch 3/11
+2026-06-09 13:18:22,907 | INFO | Financials batch 4/11
+2026-06-09 13:18:35,445 | INFO | Financials batch 5/11
+2026-06-09 13:18:47,598 | INFO | Financials batch 6/11
+2026-06-09 13:18:59,959 | INFO | Financials batch 7/11
+2026-06-09 13:19:12,330 | INFO | Financials batch 8/11
+2026-06-09 13:19:24,828 | INFO | Financials batch 9/11
+2026-06-09 13:19:37,587 | INFO | Financials batch 10/11
+2026-06-09 13:19:50,996 | INFO | Financials batch 11/11
+2026-06-09 13:19:51,770 | INFO | Financials fetch complete. Shape: (2381, 86)
+2026-06-09 13:50:40,706 | INFO | Saved all_history.parquet  (21.21 MB)
+2026-06-09 13:50:40,714 | INFO | Saved all_info.parquet  (0.12 MB)
+2026-06-09 13:50:40,739 | INFO | Saved all_financials.parquet  (0.68 MB)
+2026-06-12 14:06:00,374 | INFO | Config loaded. Date range: 2020-01-01 → 2025-01-01
+2026-06-12 14:07:34,313 | INFO | Config loaded. Date range: 2020-01-01 → 2026-01-01
+2026-06-12 14:08:02,764 | INFO | Loaded 503 tickers.
+2026-06-12 14:08:52,413 | INFO | History batch 1/11 — tickers 0–49
+2026-06-12 14:09:04,249 | INFO | History batch 2/11 — tickers 50–99
+2026-06-12 14:09:19,495 | INFO | History batch 3/11 — tickers 100–149
+2026-06-12 14:09:32,584 | INFO | History batch 4/11 — tickers 150–199
+2026-06-12 14:09:42,556 | ERROR | $FDXF: possibly delisted; no price data found  (1d 2020-01-01 -> 2026-01-01) (Yahoo error = "Data doesn't exist for startDate = 1577854800, endDate = 1767243600")
+2026-06-12 14:09:42,558 | WARNING | No history data returned for FDXF
+2026-06-12 14:09:44,984 | INFO | History batch 5/11 — tickers 200–249
+2026-06-12 14:09:56,974 | INFO | History batch 6/11 — tickers 250–299
+2026-06-12 14:10:13,091 | INFO | History batch 7/11 — tickers 300–349
+2026-06-12 14:10:26,118 | INFO | History batch 8/11 — tickers 350–399
+2026-06-12 14:10:33,023 | WARNING | Q: only 46 rows — skipping (< 200)
+2026-06-12 14:10:37,852 | INFO | History batch 9/11 — tickers 400–449
+2026-06-12 14:10:48,986 | INFO | History batch 10/11 — tickers 450–499
+2026-06-12 14:11:00,209 | INFO | History batch 11/11 — tickers 500–502
+2026-06-12 14:11:00,741 | INFO | History fetch complete. Shape: (746957, 7)
+2026-06-12 14:11:00,742 | INFO | Failed tickers: ['FDXF', 'Q']

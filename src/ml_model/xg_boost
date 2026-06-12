@@ -1,67 +1,61 @@
-# ==========================================
-# MODULE 4: XGBOOST CROSS-SECTIONAL RANKING MODEL (CLEAN FIXED VERSION)
-# ==========================================
-
 import pandas as pd
 import numpy as np
-
-from xgboost import XGBRegressor
-from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import StandardScaler
+import lightgbm as lgb
 
 # ==========================================
-# CONFIG
+# 1. LOAD DATA
 # ==========================================
-
-FEATURES = [
-    "Close","Open","High","Low",
-    "ma_5","ma_10","ma_21",
-    "ema_5","ema_10","ema_21",
-    "momentum_5","momentum_10","momentum_21",
-    "rsi_14","macd","macd_signal"
-]
-
-TARGET = "future_return_5d"   # 🔥 FIXED (was 1D noise)
-
-TOP_K = 0.10                  # top 10% of stocks
-TRANSACTION_COST = 0.0005
-VOL_TARGET = 0.01
-
-# ==========================================
-# LOAD DATA
-# ==========================================
-
 def load_data(path):
-    df = pd.read_csv(path)
-    df.columns = df.columns.str.strip()
-
-    df["Date"] = pd.to_datetime(df["Date"])
-    df = df.sort_values(["Date", "Ticker"])
-
+    df = pd.read_csv(path, low_memory=False)
+    df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce")
+    df = df.dropna(subset=["Date"])
+    df = df.sort_values(["Date", "Ticker"]).reset_index(drop=True)
     return df
 
-# ==========================================
-# CLEAN
-# ==========================================
 
-def clean(df):
-    df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.dropna(subset=FEATURES + [TARGET])
+# ==========================================
+# 2. FEATURE ENGINEERING HELPERS
+# ==========================================
+def clean_features(X):
+    return (
+        X.replace([np.inf, -np.inf], np.nan)
+         .fillna(0)
+    )
+
+def get_features(df):
+    exclude = {"Ticker", "Date", "future_return_5d"}
+    features = [c for c in df.columns if c not in exclude]
+    return df[features].select_dtypes(include=np.number).columns.tolist()
+
+def cross_sectional_zscore(df, features):
+    return df.groupby("Date")[features].transform(
+        lambda x: (x - x.mean()) / (x.std() + 1e-9)
+    )
+
+
+# ==========================================
+# 3. REGIME DETECTION (VOLATILITY STATE)
+# ==========================================
+def add_regime(df):
+    vol = df.groupby("Date")["future_return_5d"].transform("std")
+    df["regime"] = pd.qcut(vol, 3, labels=["low_vol", "mid_vol", "high_vol"])
     return df
 
-# ==========================================
-# WALK-FORWARD SPLIT (NO LEAKAGE)
-# ==========================================
 
-def walk_forward(df, train_days=504, test_days=21):
+# ==========================================
+# 4. WALK-FORWARD SPLIT
+# ==========================================
+def walk_forward_splits(df, n_splits=5):
+    dates = np.sort(df["Date"].unique())
+    step = len(dates) // n_splits
 
-    dates = sorted(df["Date"].unique())
     splits = []
-
-    for i in range(train_days, len(dates) - test_days, test_days):
-
-        train_dates = dates[i-train_days:i]
-        test_dates = dates[i:i+test_days]
+    for i in range(3, n_splits):
+        train_dates = dates[:i * step]
+        test_dates = dates[i * step:(i + 1) * step]
 
         train = df[df["Date"].isin(train_dates)]
         test = df[df["Date"].isin(test_dates)]
@@ -70,178 +64,175 @@ def walk_forward(df, train_days=504, test_days=21):
 
     return splits
 
-# ==========================================
-# MODEL
-# ==========================================
-
-def train_model(X, y):
-
-    model = XGBRegressor(
-        n_estimators=300,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        objective="reg:squarederror",
-        random_state=42
-    )
-
-    model.fit(X, y)
-    return model
 
 # ==========================================
-# CROSS-SECTION NORMALIZATION (CRITICAL FIX)
+# 5. IC METRIC
 # ==========================================
-
-def normalize_by_date(df, col):
-
-    return df.groupby("Date")[col].transform(
-        lambda x: (x - x.mean()) / (x.std() + 1e-9)
-    )
-
-# ==========================================
-# IC CALCULATION (FIXED + STABLE)
-# ==========================================
-
 def compute_ic(df):
-
-    ic_values = []
-
-    for date, g in df.groupby("Date"):
-
+    ics = []
+    for _, g in df.groupby("Date"):
         if len(g) < 5:
             continue
+        if g["pred"].std() == 0:
+            continue
 
-        ic = spearmanr(g["pred"], g[TARGET]).correlation
-        ic_values.append(ic)
+        ic = spearmanr(g["pred"], g["future_return_5d"]).correlation
+        if np.isfinite(ic):
+            ics.append(ic)
 
-    return np.nanmean(ic_values)
+    return np.mean(ics) if ics else 0
 
-# ==========================================
-# BACKTEST (RANK-BASED PORTFOLIO)
-# ==========================================
-
-def backtest(df):
-
-    df = df.copy()
-
-    # -----------------------------
-    # RANK SIGNAL
-    # -----------------------------
-    df["rank"] = df.groupby("Date")["pred"].rank(pct=True)
-
-    df["position"] = 0
-    df.loc[df["rank"] >= (1 - TOP_K), "position"] = 1
-
-    # -----------------------------
-    # VOL SCALING
-    # -----------------------------
-    df["vol"] = df.groupby("Ticker")[TARGET].transform(lambda x: x.rolling(21).std())
-    df["vol"] = df["vol"].fillna(df["vol"].mean())
-
-    df["position_size"] = VOL_TARGET / (df["vol"] + 1e-9)
-    df["position_size"] = df["position_size"].clip(0, 2)
-
-    # -----------------------------
-    # RETURNS
-    # -----------------------------
-    df["strategy_return"] = (
-        df["position"] *
-        df["position_size"] *
-        df[TARGET]
-    )
-
-    # transaction cost
-    df["trade"] = df.groupby("Ticker")["position"].diff().abs().fillna(0)
-    df["strategy_return"] -= df["trade"] * TRANSACTION_COST
-
-    # -----------------------------
-    # METRICS
-    # -----------------------------
-    sharpe = (
-        df["strategy_return"].mean() /
-        (df["strategy_return"].std() + 1e-9)
-    ) * np.sqrt(252)
-
-    total_return = (1 + df["strategy_return"].fillna(0)).prod() - 1
-    market_return = (1 + df[TARGET].fillna(0)).prod() - 1
-
-    ic = compute_ic(df)
-
-    print("\n📊 XGBOOST RANKING MODEL RESULTS (FIXED)")
-    print(f"IC (Spearman): {ic:.4f}")
-    print(f"Sharpe: {sharpe:.4f}")
-    print(f"Total Return: {total_return:.4f}")
-
-    return df, ic, sharpe, total_return
 
 # ==========================================
-# PIPELINE
+# 6. FEATURE IC TRACKING
 # ==========================================
+def feature_ic(df, features):
+    ic_scores = {}
 
-def main():
+    for f in features:
+        ics = []
+        for _, g in df.groupby("Date"):
+            if g[f].std() == 0:
+                continue
+            ic = spearmanr(g[f], g["future_return_5d"]).correlation
+            if np.isfinite(ic):
+                ics.append(ic)
 
-    df = load_data("data/processed/features_dataset.csv")
-    df = clean(df)
+        ic_scores[f] = np.mean(ics) if ics else 0
 
-    splits = walk_forward(df)
+    return pd.Series(ic_scores).sort_values(ascending=False)
 
-    all_results = []
 
-    for i, (train, test) in enumerate(splits):
+# ==========================================
+# 7. MODELS (ENSEMBLE)
+# ==========================================
+def train_models(X, y):
 
-        # -----------------------------
-        # SPLIT FEATURES
-        # -----------------------------
-        X_train = train[FEATURES]
-        y_train = train[TARGET]
+    X = clean_features(X)
+    y = y.fillna(0)
 
-        X_test = test[FEATURES].copy()
+    models = {}
 
-        # -----------------------------
-        # SCALING (FIT ONLY ON TRAIN)
-        # -----------------------------
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_test_scaled = scaler.transform(X_test)
+    # LightGBM
+    models["lgb"] = lgb.LGBMRegressor(
+        n_estimators=500,
+        learning_rate=0.03,
+        num_leaves=63,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42
+    ).fit(X, y)
 
-        # -----------------------------
-        # TRAIN MODEL
-        # -----------------------------
-        model = train_model(X_train_scaled, y_train)
+    # Linear model (FIXED)
+    scaler = StandardScaler()
+    Xs = scaler.fit_transform(X)
 
-        # -----------------------------
-        # PREDICT
-        # -----------------------------
+    models["linear"] = Ridge(alpha=1.0)
+    models["linear"].fit(Xs, y)
+
+    models["scaler"] = scaler
+
+    return models
+
+
+# ==========================================
+# 8. ENSEMBLE PREDICTION
+# ==========================================
+def predict_ensemble(models, X):
+
+    X = clean_features(X)
+
+    lgb_pred = models["lgb"].predict(X)
+
+    Xs = models["scaler"].transform(X)
+    lin_pred = models["linear"].predict(Xs)
+
+    return (lgb_pred + lin_pred) / 2
+
+# ==========================================
+# 9. VOLATILITY-SCALED PORTFOLIO
+# ==========================================
+def portfolio(df):
+    returns = []
+
+    for _, g in df.groupby("Date"):
+        vol = g["future_return_5d"].std() + 1e-9
+        weights = g["pred"] / (vol + 1e-9)
+
+        ret = np.sum(weights * g["future_return_5d"])
+        returns.append(ret)
+
+    returns = np.array(returns)
+
+    sharpe = returns.mean() / (returns.std() + 1e-9)
+    return sharpe, returns.sum()
+
+
+# ==========================================
+# 10. TRAIN + EVALUATE PIPELINE
+# ==========================================
+def run(df, features):
+
+    splits = walk_forward_splits(df)
+
+    all_preds = []
+    all_true = []
+
+    ic_list = []
+
+    for train, test in splits:
+
+        train = train.dropna(subset=["future_return_5d"])
+        test = test.dropna(subset=["future_return_5d"])
+
+        # normalize
+        train[features] = cross_sectional_zscore(train, features)
+        test[features] = cross_sectional_zscore(test, features)
+
+        X_train = train[features]
+        y_train = train["future_return_5d"]
+
+        X_test = test[features]
+
+        models = train_models(X_train, y_train)
+
         test = test.copy()
-        test["pred"] = model.predict(X_test_scaled)
+        test["pred"] = predict_ensemble(models, X_test)
 
-        # CROSS-SECTION NORMALIZATION
-        test["pred"] = normalize_by_date(test, "pred")
+        ic_list.append(compute_ic(test))
 
-        # -----------------------------
-        # BACKTEST
-        # -----------------------------
-        result, ic, sharpe, ret = backtest(test)
+        all_preds.append(test)
 
-        all_results.append(result)
+    full = pd.concat(all_preds)
 
-        print(f"\n🔁 SPLIT {i+1}")
-        print(f"IC: {ic:.4f} | Sharpe: {sharpe:.4f}")
+    # IC per feature
+    ic_scores = feature_ic(full, features)
 
-    final = pd.concat(all_results)
+    sharpe, total = portfolio(full)
 
-    # FINAL STABILITY METRIC
-    final_ic = compute_ic(final)
+    print("\n📊 HEDGE FUND ALPHA ENGINE RESULTS")
+    print(f"IC: {np.mean(ic_list):.4f}")
+    print(f"Sharpe: {sharpe:.4f}")
+    print(f"Total Return: {total:.4f}")
 
-    print("\n📊 FINAL PERFORMANCE (CLEAN MODEL)")
-    print(f"Avg IC: {final_ic:.4f}")
+    print("\n🔥 TOP FEATURES BY IC")
+    print(ic_scores.head(15))
 
-    return final
+    return full, ic_scores
+
 
 # ==========================================
-# RUN
+# MAIN
 # ==========================================
+def main():
+    df = load_data("data/processed/features_dataset.csv")
+
+    features = get_features(df)
+
+    df = add_regime(df)
+
+    run(df, features)
+
 
 if __name__ == "__main__":
     main()

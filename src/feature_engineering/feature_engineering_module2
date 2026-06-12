@@ -1,203 +1,240 @@
 import pandas as pd
-import os
 import numpy as np
+import os
+
 
 # ==========================================
-# 1. LOAD DATA
+# 1. LOAD
 # ==========================================
-def load_master_dataset(path="data/processed/master_dataset.csv"):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Missing file: {path}")
-
+def load_master_dataset(path="data/processed/all_history.csv"):
     df = pd.read_csv(path, low_memory=False)
-    df["Date"] = pd.to_datetime(df["Date"])
+
+    df["Date"] = pd.to_datetime(df["Date"], utc=True, errors="coerce")
+    df = df.dropna(subset=["Date"])
 
     df = df.sort_values(["Ticker", "Date"]).reset_index(drop=True)
 
-    print(f"Loaded dataset: {df.shape}")
+    print(f"Loaded: {df.shape}")
     return df
 
 
 # ==========================================
-# 2. BASIC CLEANING (BEFORE FEATURES)
+# 2. CORE DATA ONLY
 # ==========================================
-def fill_missing_values(df):
-
-    df = df.replace([np.inf, -np.inf], np.nan)
-
-    zero_cols = [
-        'Salaries And Wages',
-        'Loss Adjustment Expense',
-        'Policyholder Benefits Gross'
-    ]
-
-    for col in zero_cols:
-        if col in df.columns:
-            df[col] = df[col].fillna(0)
-
-    median_cols = [
-        'debtToEquity',
-        'grossProfit',
-        'operatingIncome'
-    ]
-
-    for col in median_cols:
-        if col in df.columns:
-            df[col] = df[col].fillna(df[col].median())
-
-    return df
+def select_core_columns(df):
+    return df[["Ticker", "Date", "Open", "High", "Low", "Close", "Volume"]].copy()
 
 
 # ==========================================
-# 3. FEATURES (NO TARGET HERE)
+# 3. TARGET (FIXED: CROSS-SECTIONAL RANKING)
 # ==========================================
-def compute_returns(df):
-    df["return_1d"] = df.groupby("Ticker")["Close"].pct_change()
-    return df
-
-
-def compute_moving_averages(df):
-    for w in [5, 10, 21]:
-        df[f"ma_{w}"] = df.groupby("Ticker")["Close"].transform(
-            lambda x: x.rolling(w).mean()
-        )
-        df[f"price_ma{w}_ratio"] = df["Close"] / (df[f"ma_{w}"] + 1e-9)
-    return df
-
-
-def compute_volatility(df):
-    for w in [5, 10, 21]:
-        df[f"vol_{w}"] = df.groupby("Ticker")["return_1d"].transform(
-            lambda x: x.rolling(w).std()
-        )
-    return df
-
-
-def compute_price_range(df):
-    df["daily_range"] = df["High"] - df["Low"]
-    df["range_pct"] = df["daily_range"] / (df["Close"] + 1e-9)
-    return df
-
-
-def compute_momentum(df):
-    for w in [5, 10, 21]:
-        df[f"momentum_{w}_pct"] = df.groupby("Ticker")["Close"].transform(
-            lambda x: x.pct_change(w)
-        )
-
-    df["gap"] = (
-        df["Open"] - df.groupby("Ticker")["Close"].shift(1)
-    ) / (df.groupby("Ticker")["Close"].shift(1) + 1e-9)
-
-    return df
-
-
-def compute_volume_features(df):
-    for w in [5, 10, 21]:
-        df[f"volume_avg_{w}"] = df.groupby("Ticker")["Volume"].transform(
-            lambda x: x.rolling(w).mean()
-        )
-    return df
-
-
-def compute_technical_indicators(df):
-    for span in [5, 10, 21, 12, 26]:
-        df[f"ema_{span}"] = df.groupby("Ticker")["Close"].transform(
-            lambda x: x.ewm(span=span, adjust=False).mean()
-        )
-
-    df["macd"] = df["ema_12"] - df["ema_26"]
-    return df
-
-
-# ==========================================
-# 4. TARGET (CRITICAL — DO LAST)
-# ==========================================
-def compute_targets(df):
+def compute_target(df):
 
     df["future_return_5d"] = (
         df.groupby("Ticker")["Close"].shift(-5) / df["Close"] - 1
     )
 
+    # 🔥 CRITICAL FIX: convert to ranking problem
+    df["future_rank_5d"] = df.groupby("Date")["future_return_5d"].rank(pct=True)
+
     return df
 
 
 # ==========================================
-# 5. SHIFT (LEAKAGE SAFE)
+# 4. BASE FEATURES (ONLY SIGNAL-RELEVANT)
 # ==========================================
-def shift_features(df):
+def compute_features(df):
 
-    # shift ONLY price-based features
-    cols_to_shift = [
-        "Open", "High", "Low", "Close", "Volume"
+    g = df.groupby("Ticker")
+
+    # returns
+    df["ret_1d"] = g["Close"].pct_change()
+    df["ret_3d"] = g["Close"].pct_change(3)
+
+    # momentum
+    df["mom_5"] = g["Close"].pct_change(5)
+    df["mom_10"] = g["Close"].pct_change(10)
+    df["mom_accel"] = df["mom_5"] - df["mom_10"]
+
+    # volatility (kept BUT neutralized later)
+    df["vol_5"] = g["ret_1d"].transform(lambda x: x.rolling(5).std())
+    df["vol_10"] = g["ret_1d"].transform(lambda x: x.rolling(10).std())
+    df["vol_ratio"] = df["vol_5"] / (df["vol_10"] + 1e-9)
+
+    # mean reversion
+    df["reversal_1d"] = -df["ret_1d"]
+    df["reversal_3d"] = -g["ret_1d"].rolling(3).sum().reset_index(level=0, drop=True)
+
+    # trend stretch
+    ma5 = g["Close"].transform(lambda x: x.rolling(5).mean())
+    df["stretch_5"] = df["Close"] / (ma5 + 1e-9) - 1
+
+    # gap
+    prev_close = g["Close"].shift(1)
+    df["gap"] = (df["Open"] - prev_close) / (prev_close + 1e-9)
+
+    return df
+
+
+# ==========================================
+# 5. MARKET-NEUTRALIZATION (CRITICAL FIX)
+# ==========================================
+def compute_market_neutral(df):
+
+    features = [
+        "mom_5", "mom_10", "mom_accel",
+        "vol_5", "vol_10", "vol_ratio",
+        "reversal_1d", "reversal_3d",
+        "stretch_5", "gap"
     ]
 
-    df[cols_to_shift] = df.groupby("Ticker")[cols_to_shift].shift(1)
+    # market return baseline
+    df["market_ret_1d"] = df.groupby("Date")["ret_1d"].transform("mean")
+
+    df["excess_ret_1d"] = df["ret_1d"] - df["market_ret_1d"]
+
+    for f in features:
+
+        # cross-sectional rank (PRIMARY SIGNAL TRANSFORMATION)
+        df[f"{f}_rank"] = df.groupby("Date")[f].rank(pct=True)
+
+        # cross-sectional z-score
+        df[f"{f}_z"] = (
+            df[f] - df.groupby("Date")[f].transform("mean")
+        ) / (df.groupby("Date")[f].transform("std") + 1e-9)
+
+    # regime feature
+    df["cross_sectional_vol"] = df.groupby("Date")["ret_1d"].transform("std")
 
     return df
 
 
 # ==========================================
-# 6. CLEAN (SAFE, NOT DESTRUCTIVE)
+# 6. REGIME FEATURES (IMPORTANT FIX)
+# ==========================================
+def add_regime_features(df):
+
+    # volatility regime
+    df["high_vol_regime"] = (
+        df["vol_5"] > df.groupby("Date")["vol_5"].transform("median")
+    ).astype(int)
+
+    # momentum regime
+    df["trend_regime"] = (
+        df["mom_5"] > df.groupby("Date")["mom_5"].transform("median")
+    ).astype(int)
+
+    return df
+
+
+# ==========================================
+# 7. CLEAN FEATURES
 # ==========================================
 def clean(df):
 
-    # remove rows without target
-    df = df.dropna(subset=["future_return_5d"])
+    df = df.replace([np.inf, -np.inf], np.nan)
 
-    # allow partial missing features (VERY IMPORTANT)
-    df = df.dropna(thresh=int(df.shape[1] * 0.65))
+    df = df.dropna(subset=["future_return_5d", "future_rank_5d"])
+
+    df = df.dropna(thresh=int(df.shape[1] * 0.7))
 
     return df
 
 
 # ==========================================
-# 7. SAVE
+# 8. FINAL FEATURE SET
 # ==========================================
-def save_features(df, path="data/processed/features_dataset.csv"):
+def build_feature_set(df):
 
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    features = df.select_dtypes(include=np.number).columns.tolist()
 
-    print(f"Final dataset shape: {df.shape}")
-    print(f"Target coverage: {df['future_return_5d'].notna().mean():.2%}")
+    # remove targets
+    for t in ["future_return_5d", "future_rank_5d"]:
+        if t in features:
+            features.remove(t)
 
-    df.to_csv(path, index=False)
+    # remove weak / sparse
+    features = [f for f in features if df[f].nunique() > 5]
+    features = [f for f in features if df[f].isna().mean() < 0.2]
+
+    return df[["Ticker", "Date", "future_return_5d", "future_rank_5d"] + features], features
 
 
 # ==========================================
-# MAIN PIPELINE
+# 9. LAG (NO LEAKAGE)
+# ==========================================
+def lag(df):
+
+    exclude = ["Ticker", "Date", "future_return_5d", "future_rank_5d"]
+
+    cols = [c for c in df.columns if c not in exclude]
+
+    df[cols] = df.groupby("Ticker")[cols].shift(1)
+
+    return df
+
+
+# ==========================================
+# 10. IC ANALYSIS (RANK IC IS KEY NOW)
+# ==========================================
+def compute_ic(df, features):
+
+    ic_scores = {}
+
+    for f in features:
+
+        tmp = df[[f, "future_rank_5d"]].dropna()
+
+        if tmp[f].std() == 0:
+            continue
+
+        ic = tmp[f].corr(tmp["future_rank_5d"])
+
+        if np.isfinite(ic):
+            ic_scores[f] = ic
+
+    return pd.Series(ic_scores).sort_values(ascending=False)
+
+
+# ==========================================
+# 11. PIPELINE
+# ==========================================
+def run_pipeline(df):
+
+    df = select_core_columns(df)
+    df = compute_target(df)
+
+    df = compute_features(df)
+    df = compute_market_neutral(df)
+    df = add_regime_features(df)
+
+    df = lag(df)
+    df = clean(df)
+
+    df, features = build_feature_set(df)
+
+    ic = compute_ic(df, features)
+
+    print("\n================ TEST REPORT (RANK IC) ================")
+    print(ic.head(20))
+
+    print("\nFinal shape:", df.shape)
+    print("Features:", len(features))
+
+    os.makedirs("data/processed", exist_ok=True)
+    df.to_csv("data/processed/features_dataset.csv", index=False)
+
+    return df, features
+
+
+# ==========================================
+# MAIN
 # ==========================================
 def main():
-
     df = load_master_dataset()
+    df, features = run_pipeline(df)
 
-    df = fill_missing_values(df)
-
-    # features
-    df = compute_returns(df)
-    df = compute_moving_averages(df)
-    df = compute_volatility(df)
-    df = compute_price_range(df)
-    df = compute_momentum(df)
-    df = compute_volume_features(df)
-    df = compute_technical_indicators(df)
-
-    # SHIFT BEFORE TARGET (CRITICAL FIX)
-    df = shift_features(df)
-
-    # TARGET LAST
-    df = compute_targets(df)
-
-    # CLEAN LAST
-    df = clean(df)
-     # 🔍 DEBUG CHECKS (PUT HERE)
-    print("\n🔎 DEBUG: TARGET CHECK")
-    print("NaN future_return_5d:", df["future_return_5d"].isna().sum())
-
-    print("\n🔎 DEBUG: TICKER DISTRIBUTION")
-    print(df.groupby("Ticker").size().describe())
-
-    save_features(df)
+    print("\nDONE — ALPHA v3 (STRUCTURALLY CORRECT)")
 
 
 if __name__ == "__main__":
