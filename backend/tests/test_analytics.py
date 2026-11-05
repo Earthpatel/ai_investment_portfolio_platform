@@ -86,3 +86,16 @@ def test_ml_features_are_backward_looking():
     a = panel[panel["date"] < cutoff].set_index(["date", "ticker"])[ml.FEATURES]
     b = panel2[panel2["date"] < cutoff].set_index(["date", "ticker"])[ml.FEATURES]
     pd.testing.assert_frame_equal(a, b.loc[a.index])
+
+
+def test_backtest_min_variance_actually_optimizes():
+    # Assets with very different volatility: min-variance must overweight the calm one
+    rng = np.random.default_rng(3)
+    idx = pd.bdate_range("2018-01-01", periods=700)
+    r = np.column_stack([rng.normal(0.0004, 0.004, 700), rng.normal(0.0004, 0.02, 700), rng.normal(0.0004, 0.03, 700)])
+    px = pd.DataFrame(100 * np.exp(np.cumsum(r, 0)), index=idx, columns=list("ABC"))
+    w = bt._min_var_weights(px.pct_change().iloc[1:253], max_w=1.0)
+    assert w[0] > 0.8
+    res = bt.backtest(px, np.full(3, 1 / 3), None, "quarterly", 10_000, cost_bps=0, max_w=1.0)
+    s = res["strategies"]
+    assert s["min_variance"]["metrics"]["volatility"] < s["equal_weight"]["metrics"]["volatility"] * 0.8

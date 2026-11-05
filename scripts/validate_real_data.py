@@ -87,6 +87,9 @@ if bt.status_code == 200:
     manual = 10_000 * float((px.iloc[-1] / px.iloc[0]) @ np.array([0.5, 0.25, 0.25]))
     got = j["strategies"]["buy_and_hold"]["series"][-1][1]
     check("buy & hold equals hand calculation", abs(got / manual - 1) < 1e-6, f"({got:,.2f} vs {manual:,.2f})")
+    mv, ew = j["strategies"]["min_variance"]["metrics"], j["strategies"]["equal_weight"]["metrics"]
+    check("min-variance differs from equal weight", abs(mv["volatility"] - ew["volatility"]) > 1e-4,
+          f"(vol {mv['volatility']:.2%} vs {ew['volatility']:.2%})")
     for k, v in j["strategies"].items():
         print(f"  {v['label']:45s} CAGR {v['metrics']['cagr']:.2%}  vol {v['metrics']['volatility']:.2%}  maxDD {v['metrics']['max_drawdown']:.2%}")
 st = c.post("/api/stress", json=P)
@@ -96,6 +99,32 @@ if st.status_code == 200:
         if cr["available"]:
             print(f"  {cr['label']:35s} return {cr['total_return']:.1%}  worst fall {cr['max_drawdown']:.1%}  proxied={cr['proxied']}")
 check("explorer", c.get("/api/asset/NVDA?period=5y").status_code == 200)
+
+print("\n== Machine learning on the real S&P 500 history ==")
+if data._local_history() is None:
+    print("  skipped: data/processed/all_history.parquet not found")
+else:
+    import time
+    from app.engine import ml
+    from app.main import _ml_loader
+    close, vol, synth = _ml_loader(500)()
+    t0 = time.time()
+    panel = ml.build_dataset(close, vol)
+    res = ml.train_and_evaluate(panel)
+    print(f"  {res['universe_size']} stocks, {res['months']} months, {res['rows']:,} samples, {len(res['folds'])} folds, {time.time() - t0:.0f}s")
+    for k, m in res["models"].items():
+        ic = m["ic_mean"]
+        ex = (m["strategy"] or {}).get("ann_excess_return")
+        print(f"  {m['label']:42s} IC {'   n/a' if ic is None else f'{ic:+.3f}'}  t {m['ic_tstat'] or 0:+.1f}  top-20% excess/yr {'n/a' if ex is None else f'{ex:+.1%}'}")
+    print("  VERDICT:", res["verdict"])
+    check("ML leakage checks", res["leakage_checks_passed"])
+    check("shuffled-label sanity IC ~ 0", abs(res["models"]["shuffled_ridge"]["ic_mean"] or 0) < 0.03)
+    res["synthetic"] = False
+    from app import config
+    import json
+    config.ML_DIR.mkdir(parents=True, exist_ok=True)
+    (config.ML_DIR / "results.json").write_text(json.dumps(res))
+    print("  saved results for the AI & ML page")
 
 print("\nALL CHECKS PASSED" if ok else "\nSOME CHECKS FAILED")
 sys.exit(0 if ok else 1)

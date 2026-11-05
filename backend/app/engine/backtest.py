@@ -33,10 +33,13 @@ def _min_var_weights(rets: pd.DataFrame, max_w: float) -> np.ndarray:
     from scipy.optimize import minimize
     n = rets.shape[1]
     cov, _ = shrunk_cov(rets.to_numpy(float))
-    cov = nearest_psd(cov)
+    # Annualize: daily variances (~1e-4) are below SLSQP's default tolerance, which made
+    # the optimizer stop at its starting point (equal weight) without moving.
+    cov = nearest_psd(cov * 252)
     max_w = max(max_w, 1 / n + 1e-9)
     res = minimize(lambda w: w @ cov @ w, np.full(n, 1 / n), method="SLSQP",
-                   bounds=[(0, max_w)] * n, constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1}])
+                   bounds=[(0, max_w)] * n, constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1}],
+                   options={"maxiter": 500, "ftol": 1e-12})
     w = np.clip(res.x, 0, None)
     return w / w.sum()
 
