@@ -1,149 +1,118 @@
-# AI Investment Manager Portfolio Platform
+# Monte Carlo Investment Lab
 
-A machine learning pipeline that analyses all 503 S&P 500 companies to generate
-data-driven investment signals — built to demonstrate production-grade data
-engineering and ML skills for Business Analytics roles.
+**If I invest a certain amount in specific stocks, ETFs or sectors, what might it be worth in the future, and what risks should I understand?**
 
----
+An interactive investment research platform: build a portfolio from real tickers, then watch thousands of simulated futures unfold. Explore the distribution of outcomes, drawdowns and goal probabilities, and compare scenarios. Also includes portfolio optimization, honest walk-forward machine learning, historical backtests, crisis stress tests, and a Monty Hall lab that teaches the Monte Carlo idea.
 
-## What it does
+> Simulations show possibilities under stated assumptions. They are not forecasts, guarantees, or investment advice.
 
-1. **Collects** daily price history, company fundamentals, and annual financials
-   for every S&P 500 ticker via yfinance
-2. **Engineers** technical indicators (returns, volatility, momentum, RSI, MACD)
-   and fundamental features (P/E, margins, debt ratios) aligned by fiscal year
-3. **Trains** a CatBoost classification model to predict buy / hold / sell signals
-4. **Backtests** the strategy against the S&P 500 benchmark
-5. **Visualises** portfolio performance, sector allocation, and risk metrics
-
----
-
-## Project structure
-
-```
-investment_platform/
-├── notebooks/
-│   ├── 01_data_collection.ipynb       # Fetch & validate raw data
-│   ├── 02_feature_engineering.ipynb   # Build ML-ready feature set
-│   ├── 03_eda.ipynb                   # Exploratory data analysis
-│   ├── 04_model_training.ipynb        # CatBoost model training
-│   ├── 05_backtesting.ipynb           # Strategy vs benchmark
-│   └── 06_dashboard.ipynb            # Interactive visualisations
-├── src/
-│   ├── __init__.py                    # Package entry point
-│   └── data_collection.py            # Reusable pipeline module
-├── data/
-│   ├── raw/                           # Source CSVs (gitignored)
-│   └── processed/                     # Parquet feature store (gitignored)
-├── logs/                              # Pipeline run logs (gitignored)
-├── requirements.txt
-└── README.md
-```
-
----
-
-## Tech stack
-
-| Layer | Tools |
+| Layer | Stack |
 |---|---|
-| Data collection | yfinance, pandas, pyarrow |
-| Feature engineering | pandas, numpy, scikit-learn |
-| ML model | CatBoost, XGBoost, LightGBM |
-| Visualisation | plotly, matplotlib |
-| Environment | Python 3.13, Jupyter |
+| Frontend | React 19 + TypeScript, Vite, Tailwind CSS v4, Recharts, custom canvas fan chart |
+| Backend | Python 3.11+, FastAPI, NumPy, pandas, SciPy, scikit-learn (+ LightGBM / CatBoost if installed) |
+| Data | yfinance (adjusted daily prices), per-ticker Parquet cache, S&P 500 constituents with GICS sectors |
+| Education | `frontend/public/monty-hall.html`: a self-contained single-page HTML/JS Monte Carlo (the original brief) |
 
 ---
 
-## Quickstart
+## Quick start (macOS / Linux)
 
-**1. Clone and set up environment**
 ```bash
-git clone https://github.com/Earthpatel/ai_investment_portfolio_platform.git
-cd ai_investment_portfolio_platform
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# 1. Backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r backend/requirements.txt
+python scripts/update_data.py          # first time: S&P 500 list + prices (~5–10 min)
+cd backend && uvicorn app.main:app --port 8000 &   # API on http://127.0.0.1:8000
+cd ..
+
+# 2. Frontend (Node 20+)
+cd frontend && npm install && npm run dev            # http://localhost:5173
 ```
 
-**2. Fetch S&P 500 tickers**
+Or run both with `./run.sh`.
+
+**Tests**
+
 ```bash
-python src/data_collection.py --refresh
+cd backend && pytest -q                 # 30 math/engine/API tests (synthetic data, offline)
+python scripts/validate_real_data.py    # end-to-end checks on REAL prices (needs internet)
+cd frontend && npm run build            # type-check + production build
 ```
 
-**3. Run full data collection**
-```bash
-python src/data_collection.py
-```
-
-Or open `notebooks/01_data_collection.ipynb` and run all cells.
-
-**4. Run notebooks in order**
-
-Open Jupyter and run notebooks 01 → 06 in sequence. Each notebook
-loads the outputs of the previous one via `src.data_collection.load_all()`.
+**Offline development:** `MC_DEV_SYNTHETIC=1 uvicorn app.main:app` serves deterministic synthetic prices. Every response is flagged `synthetic: true` and the UI shows a warning banner. Synthetic data is never used unless you set this variable.
 
 ---
 
-## Key design decisions
+## What's inside
 
-**Three separate tables, no premature merge**
-Price history, company info, and financials are stored as separate Parquet
-files and only joined during feature engineering — avoiding the cartesian
-product explosion that occurs when merging daily prices with annual financials
-on ticker alone.
-
-**Pinned date range**
-`START_DATE = 2020-01-01` and `END_DATE = 2025-01-01` are pinned constants,
-not floating windows. This ensures the model trains on identical data across
-re-runs, making experiment results reproducible and comparable.
-
-**Batched API fetching**
-All 503 tickers are fetched in batches of 50 with 2-second pauses between
-batches to respect yfinance rate limits. Failed tickers are logged and skipped
-without stopping the pipeline — a ~99% success rate is expected and acceptable.
-
-**Parquet over CSV**
-Parquet preserves column types across read/write cycles, supports column
-pruning (downstream notebooks load only the columns they need), and is roughly
-10x faster and 5x smaller than equivalent CSV files at this scale.
-
-**Versioned snapshots**
-Every pipeline run saves a timestamped copy alongside the latest file
-(e.g. `all_history_20260612_1429.parquet`), enabling rollback if a future
-fetch introduces bad data.
+| Section | What it does |
+|---|---|
+| **Overview** | Workflow, presets (labeled as educational, not recommendations), data status |
+| **Portfolio Builder** | Ticker search with GICS sector filters, weights (must total 100%), equal-weight button, concentration and ETF-overlap warnings, contributions (weekly/monthly/annual), horizon, method, calibration window, rebalancing, fees, inflation, dividend reinvestment, seed. Includes a data quality panel. |
+| **Monte Carlo Simulator** | Animated fan chart (start/pause/resume/reset, speed slider, slow-motion, max speed), live-building histogram and convergence chart, results dashboard, goal explorer, year-by-year table, drawdown distribution, assumptions panel; CSV / PNG / report export |
+| **Stock & Sector Explorer** | Price + SMA50/200, return distribution vs. normal curve, drawdown, RSI, MACD, rolling volatility, correlation and beta vs. SPY, sector-ETF comparison, sector scoreboard |
+| **AI & Machine Learning** | Walk-forward evaluation of Ridge / Random Forest / gradient boosting (+ LightGBM, CatBoost) vs. baselines; IC, MAE/RMSE, cost-adjusted top-quintile strategy, leakage checks, shuffled-label sanity check. Gives an honest verdict. |
+| **Portfolio Optimization** | Min-variance, max-Sharpe, risk parity, target volatility with per-asset and per-sector caps; efficient frontier, correlation heatmap, and bootstrap weight-stability analysis |
+| **Backtesting** | Buy & hold vs. rebalanced vs. equal weight vs. walk-forward min-variance, with transaction costs and an SPY benchmark; survivorship-bias disclosure |
+| **Risk Analytics** | One-variable what-if analysis, scenario comparison with common random numbers, historical crisis replays (2000, 2008, 2011, 2020, 2022) |
+| **Learn Monte Carlo** | Monty Hall (manual play + live simulation), random walks, percentiles, correlation, simple/advanced explanations |
 
 ---
 
-## Connecting to downstream scripts
+## Mathematical assumptions
 
-Every notebook and script imports data through a single entry point:
+**Return convention.** Asset returns are simulated as **monthly log returns** *r*. Each holding grows by `exp(r)`, so values can never go negative. Holdings drift between rebalances.
 
-```python
-from src.data_collection import load_all
+**Methods**
 
-data = load_all()
-history    = data['history']     # Daily OHLCV — 498 tickers × ~1,250 rows
-info       = data['info']        # Company metadata — 498 rows × 31 cols
-financials = data['financials']  # Annual income statements — ~2,000 rows
+1. **Parametric.** Uses the mean vector and covariance of historical monthly log returns. The covariance gets Ledoit–Wolf shrinkage and a PSD repair (eigenvalue clipping), then is sampled with a Cholesky factor.
+2. **Historical bootstrap.** Circular block bootstrap of *joint* monthly return vectors (default 6-month blocks). This preserves fat tails, cross-asset correlation and some autocorrelation, but it cannot produce events missing from the sample.
+3. **Custom.** User-supplied annual *arithmetic* mean `m` and volatility `s`, combined with historical correlations. They are converted with the lognormal identities `b² = ln(1 + s²/(1+m)²)` and `a = ln(1+m) − b²/2`. Labeled as assumptions, not forecasts.
+
+**Contributions.** Monthly steps: weekly contributions are applied as 52/12 per month, and annual contributions in the first (or last) month of each year. "Start" timing invests before that month's return; "end" timing invests after it.
+
+**Prices** are adjusted closes (dividends and splits folded in), i.e. a total-return proxy. With dividend reinvestment off, a trailing dividend yield is paid out monthly as non-compounding cash.
+
+**Fees** are deducted monthly at `(1 − fee)^(1/12)`. **Inflation-adjusted** values divide by `(1 + inflation)^(t/12)`.
+
+**Metrics**
+- Percentiles are taken across simulations at each month. The median ending value is the median of terminal wealth, *not* wealth compounded at a "median return".
+- P(loss) = #(terminal < total contributed) / N.
+- The annualized return is **time-weighted**, so it is independent of contribution timing.
+- Drawdown is measured on the time-weighted index, so contributions don't hide losses.
+- CVaR 5% = mean of the worst 5% of terminal values.
+
+**Reproducibility.** Same seed + same inputs = identical results. Scenario comparisons reuse the seed (common random numbers).
+
+## Known limitations
+
+- History-calibrated simulations inherit the calibration window. A strong decade can overstate future returns, and a short window is noisy. Mean returns carry large estimation error.
+- Correlations jump in crises. Neither parametric nor bootstrap simulation fully captures regime shifts.
+- Taxes, bid/ask spreads and behavioral factors are ignored.
+- Backtests use today's tickers (survivorship bias). The ML universe is today's S&P 500.
+- The ML target is short-horizon relative return. Weak but positive ICs are normal, and the app disables ML-tilted assumptions unless out-of-sample skill is statistically meaningful.
+- yfinance is an unofficial, free Yahoo Finance wrapper. For production, a licensed provider (Polygon, Tiingo, EOD Historical Data) can replace `app/data.py::_download` without touching the engines.
+
+## Project layout
+
+```
+backend/app/
+  main.py          FastAPI routes + request validation
+  data.py          Data layer: cache → yfinance → local parquet; provenance on every series
+  engine/          Pure numerical code (no web): simulate, optimize, backtest, analytics, ml
+backend/tests/     Mathematical, financial and API tests
+frontend/src/      React app (pages/, components/, lib/)
+frontend/public/monty-hall.html   Standalone single-page Monty Hall simulation
+scripts/           update_data.py (data refresh), validate_real_data.py (real-data QA)
+legacy/            The original notebooks and modules (v1), kept for reference
 ```
 
----
+## What changed from v1 (`legacy/`)
 
-## Pipeline order
-
-```
-data_collection  →  feature_engineering  →  model_training
-      →  backtesting  →  portfolio_optimizer  →  dashboard
-```
-
----
-
-## Notes
-
-- Data files are gitignored — run the collection pipeline locally to
-  regenerate them
-- A small number of tickers (~5) fail due to recent spinoffs or delistings;
-  this is expected and does not affect model quality
-- The `all_info` table captures fundamentals as a point-in-time snapshot.
-  Time-varying financial ratios are derived from `all_financials` instead,
-  which is correctly timestamped by fiscal year end
+v1 pipeline (data collection → feature engineering → ML notebooks) was reviewed and:
+- **Kept:** yfinance + Parquet storage, S&P 500 universe with GICS sectors, technical features (RSI, MACD, SMA distance, volatility, momentum), and the walk-forward ML idea.
+- **Fixed:**
+  - The master-dataset merge joined fundamentals on `Ticker` alone, duplicating every daily row once per fiscal year.
+  - The ML walk-forward had no embargo between train and test.
+  - A "regime" feature was computed from *future* returns (look-ahead leakage).
+- **Added:** everything interactive (simulation, optimization, backtesting, stress tests, UI) plus tests.

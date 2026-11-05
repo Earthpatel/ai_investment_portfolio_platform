@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Monty Hall · Monte Carlo Simulation</title>
+<!-- Self-contained single page (HTML + JS, no build, no dependencies). The original project brief. -->
+<style>
+  :root { --bg:#070b14; --panel:#0d1424; --panel2:#121b2f; --line:#1d2840; --text:#e6ebf5; --muted:#94a0b8; --faint:#5f6b84;
+          --stay:#f87171; --switch:#34d399; --accent:#3b82f6; --warn:#fbbf24; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f5f7fb; --panel:#fff; --panel2:#eef2f8; --line:#dde3ee; --text:#0f172a; --muted:#5b6577; --faint:#8b95a7; --stay:#dc2626; --switch:#059669; --accent:#2563eb; --warn:#d97706; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  h1 { font: 600 24px Georgia, serif; margin: 0 0 4px; } .sub { color: var(--muted); margin: 0 0 18px; }
+  .grid { display:grid; gap:16px; grid-template-columns: 1fr; } @media (min-width: 900px) { .grid { grid-template-columns: 380px 1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; }
+  .card h2 { font-size:14px; margin:0 0 10px; }
+  .doors { display:flex; gap:10px; justify-content:center; margin:12px 0; }
+  .door { width:96px; height:140px; border-radius:10px 10px 4px 4px; border:2px solid var(--line); background:linear-gradient(#2a3a5c,#1b2640);
+          color:#fff; font:600 22px Georgia; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:transform .25s, border-color .2s; position:relative; }
+  .door:hover:not(.open) { transform: translateY(-3px); border-color: var(--accent); }
+  .door.picked { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.35); }
+  .door.open { background: var(--panel2); cursor: default; font-size: 46px; }
+  .door .tag { position:absolute; bottom:-22px; font:500 11px Inter, sans-serif; color:var(--accent); }
+  .msg { min-height: 44px; text-align:center; color: var(--muted); margin-top: 26px; }
+  button { font: 500 13px Inter, sans-serif; border-radius: 8px; padding: 8px 12px; border: 1px solid var(--line); background: var(--panel2); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  label { font-size:12px; color: var(--muted); display:block; margin: 10px 0 4px; }
+  input[type=number] { width: 120px; padding: 7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font: 13px ui-monospace, monospace; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .stats { display:grid; grid-template-columns: repeat(3,1fr); gap:10px; margin-top:12px; }
+  .stat { background: var(--panel2); border-radius: 10px; padding: 10px; } .stat b { display:block; font: 600 20px ui-monospace, monospace; }
+  .k { font-size:11px; color: var(--faint); }
+  canvas { width:100%; height:300px; display:block; }
+  .legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-top:6px; } .legend i { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:5px; }
+  .note { font-size:13px; color: var(--muted); }
+  .bar { height: 10px; border-radius: 6px; background: var(--panel2); overflow:hidden; } .bar > div { height: 100%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>The Monty Hall problem</h1>
+  <p class="sub">A Monte Carlo simulation: play by hand, then let the computer play thousands of games and watch the win rates converge.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>1 · Play it yourself</h2>
+      <div class="doors" id="doors"></div>
+      <div class="msg" id="msg">Pick a door.</div>
+      <div class="row" style="justify-content:center">
+        <button id="stayBtn" disabled>Stay</button>
+        <button id="switchBtn" disabled>Switch</button>
+        <button id="newGame">New game</button>
+      </div>
+      <div class="stats">
+        <div class="stat"><span class="k">You played</span><b id="mPlayed">0</b></div>
+        <div class="stat"><span class="k">Stay wins</span><b id="mStay">0/0</b></div>
+        <div class="stat"><span class="k">Switch wins</span><b id="mSwitch">0/0</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2 · Simulate many games</h2>
+      <div class="row">
+        <div><label for="trials">Number of trials</label><input id="trials" type="number" min="1" max="1000000" value="2000" /></div>
+        <div style="flex:1;min-width:200px"><label for="speed">Speed: <b id="speedLbl"></b></label><input id="speed" type="range" min="0" max="100" value="45" /></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="start">Start</button>
+        <button id="pause" disabled>Pause</button>
+        <button id="reset">Reset</button>
+        <button id="slow" title="Slow motion: 2 games per second">Slow motion</button>
+        <button id="max" title="Run all remaining trials at once">Max speed</button>
+        <span class="k" id="progress" style="margin-left:auto"></span>
+      </div>
+      <canvas id="chart" aria-label="Win rate over trials"></canvas>
+      <div class="legend"><span><i style="background:var(--switch)"></i>Switch win rate</span><span><i style="background:var(--stay)"></i>Stay win rate</span><span><i style="background:var(--faint)"></i>Theory: 2/3 and 1/3</span></div>
+      <div class="stats">
+        <div class="stat"><span class="k">Trials run</span><b id="sN">0</b></div>
+        <div class="stat"><span class="k">Stay win rate</span><b id="sStay" style="color:var(--stay)">—</b><div class="bar"><div id="bStay" style="width:0;background:var(--stay)"></div></div></div>
+        <div class="stat"><span class="k">Switch win rate</span><b id="sSwitch" style="color:var(--switch)">—</b><div class="bar"><div id="bSwitch" style="width:0;background:var(--switch)"></div></div></div>
+      </div>
+      <p class="k" id="lastGame" style="margin-top:8px"></p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>Why does switching win about 2/3 of the time?</h2>
+    <p class="note">Your first pick hits the car with probability 1/3, and nothing the host does changes that. The host <b>knows</b> where the car is and always opens a goat door you didn’t pick. So the 2/3 chance that the car was “somewhere else” collapses onto the single remaining closed door. Staying wins only if your first guess was right (1/3); switching wins whenever it was wrong (2/3).</p>
+    <p class="note">This is Monte Carlo in a nutshell: when the logic feels slippery, simulate the experiment many times and count. The more trials, the closer the estimate gets to the truth: the error shrinks roughly like 1/√N. The same idea powers the investment simulator: instead of doors, each “trial” is a possible future for a portfolio.</p>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ---------- Manual game ----------
+  const doorsEl = document.getElementById('doors'), msg = document.getElementById('msg');
+  const stayBtn = document.getElementById('stayBtn'), switchBtn = document.getElementById('switchBtn');
+  let game, manual = { played: 0, stayWins: 0, stayN: 0, switchWins: 0, switchN: 0 };
+  const rand3 = () => Math.floor(Math.random() * 3);
+
+  function newGame() {
+    game = { car: rand3(), pick: null, opened: null, done: false };
+    render(); msg.textContent = 'Pick a door.'; stayBtn.disabled = switchBtn.disabled = true;
+  }
+  function render() {
+    doorsEl.innerHTML = '';
+    for (let i = 0; i < 3; i++) {
+      const d = document.createElement('div');
+      const isOpen = game.done || game.opened === i;
+      d.className = 'door' + (game.pick === i ? ' picked' : '') + (isOpen ? ' open' : '');
+      d.textContent = isOpen ? (i === game.car ? '🚗' : '🐐') : (i + 1);
+      d.setAttribute('role', 'button'); d.setAttribute('aria-label', 'Door ' + (i + 1)); d.tabIndex = 0;
+      if (game.pick === i) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = 'your pick'; d.appendChild(t); }
+      d.onclick = () => choose(i); d.onkeydown = e => (e.key === 'Enter' || e.key === ' ') && choose(i);
+      doorsEl.appendChild(d);
+    }
+  }
+  function choose(i) {
+    if (game.pick !== null || game.done) return;
+    game.pick = i;
+    const goats = [0, 1, 2].filter(d => d !== i && d !== game.car);
+    game.opened = goats[Math.floor(Math.random() * goats.length)];
+    render();
+    msg.innerHTML = `The host opens door ${game.opened + 1}: a goat. Stay with door ${i + 1}, or switch?`;
+    stayBtn.disabled = switchBtn.disabled = false;
+  }
+  function finish(sw) {
+    if (game.pick === null || game.done) return;
+    const final = sw ? [0, 1, 2].find(d => d !== game.pick && d !== game.opened) : game.pick;
+    game.pick = final; game.done = true;
+    const win = final === game.car;
+    manual.played++;
+    if (sw) { manual.switchN++; if (win) manual.switchWins++; } else { manual.stayN++; if (win) manual.stayWins++; }
+    render(); stayBtn.disabled = switchBtn.disabled = true;
+    msg.innerHTML = (win ? '🎉 You win the car!' : '🐐 A goat. ') + ` You ${sw ? 'switched' : 'stayed'}. The car was behind door ${game.car + 1}.`;
+    document.getElementById('mPlayed').textContent = manual.played;
+    document.getElementById('mStay').textContent = `${manual.stayWins}/${manual.stayN}`;
+    document.getElementById('mSwitch').textContent = `${manual.switchWins}/${manual.switchN}`;
+  }
+  stayBtn.onclick = () => finish(false); switchBtn.onclick = () => finish(true);
+  document.getElementById('newGame').onclick = newGame;
+  newGame();
+
+  // ---------- Monte Carlo simulation ----------
+  const canvas = document.getElementById('chart'), ctx = canvas.getContext('2d');
+  const trialsEl = document.getElementById('trials'), speedEl = document.getElementById('speed'), speedLbl = document.getElementById('speedLbl');
+  const startBtn = document.getElementById('start'), pauseBtn = document.getElementById('pause');
+  let sim = null, running = false, rafId = null, carry = 0, last = 0;
+
+  // speed slider is logarithmic: 1 .. 50,000 games per second
+  const gamesPerSecond = () => Math.round(Math.pow(50000, speedEl.value / 100));
+  const updSpeed = () => speedLbl.textContent = gamesPerSecond().toLocaleString() + ' games/s';
+  speedEl.oninput = updSpeed; updSpeed();
+
+  function resetSim() {
+    cancelAnimationFrame(rafId); running = false;
+    const N = Math.max(1, Math.min(1000000, parseInt(trialsEl.value || '1', 10)));
+    trialsEl.value = N;
+    sim = { N, n: 0, stayWins: 0, switchWins: 0, history: [] };
+    startBtn.disabled = false; startBtn.textContent = 'Start'; pauseBtn.disabled = true;
+    document.getElementById('lastGame').textContent = '';
+    updateStats(); draw();
+  }
+
+  function playOne() {
+    // One game. Both strategies are evaluated on the same random game (fair comparison).
+    const car = rand3(), pick = rand3();
+    const goats = [0, 1, 2].filter(d => d !== pick && d !== car);
+    const opened = goats[Math.floor(Math.random() * goats.length)];
+    const switched = [0, 1, 2].find(d => d !== pick && d !== opened);
+    sim.n++;
+    if (pick === car) sim.stayWins++;
+    if (switched === car) sim.switchWins++;
+    // record at most ~1500 points for the chart
+    const every = Math.max(1, Math.floor(sim.N / 1500));
+    if (sim.n % every === 0 || sim.n === sim.N) sim.history.push([sim.n, sim.stayWins / sim.n, sim.switchWins / sim.n]);
+    return { car, pick, opened, switched };
+  }
+
+  function step(now) {
+    if (!running) return;
+    const dt = Math.min(0.25, (now - last) / 1000); last = now;
+    carry += dt * gamesPerSecond();
+    let k = Math.floor(carry); carry -= k;
+    let g;
+    while (k-- > 0 && sim.n < sim.N) g = playOne();
+    if (g) document.getElementById('lastGame').textContent = `Last game: car behind ${g.car + 1}, first pick ${g.pick + 1}, host opened ${g.opened + 1} → stay ${g.pick === g.car ? 'wins' : 'loses'}, switch ${g.switched === g.car ? 'wins' : 'loses'}.`;
+    updateStats(); draw();
+    if (sim.n >= sim.N) { running = false; startBtn.textContent = 'Done'; startBtn.disabled = true; pauseBtn.disabled = true; return; }
+    rafId = requestAnimationFrame(step);
+  }
+
+  function start() {
+    if (!sim || sim.n >= sim.N || parseInt(trialsEl.value, 10) !== sim.N && sim.n === 0) resetSim();
+    running = true; last = performance.now(); carry = 0;
+    startBtn.disabled = true; pauseBtn.disabled = false; pauseBtn.textContent = 'Pause';
+    rafId = requestAnimationFrame(step);
+  }
+  function togglePause() {
+    if (running) { running = false; cancelAnimationFrame(rafId); pauseBtn.textContent = 'Resume'; }
+    else { running = true; last = performance.now(); pauseBtn.textContent = 'Pause'; rafId = requestAnimationFrame(step); }
+  }
+  startBtn.onclick = start; pauseBtn.onclick = togglePause;
+  document.getElementById('reset').onclick = resetSim;
+  document.getElementById('slow').onclick = () => { speedEl.value = Math.round(100 * Math.log(2) / Math.log(50000)); updSpeed(); };
+  document.getElementById('max').onclick = () => {
+    if (!sim || sim.n >= sim.N) resetSim();
+    while (sim.n < sim.N) playOne();
+    running = false; cancelAnimationFrame(rafId);
+    startBtn.textContent = 'Done'; startBtn.disabled = true; pauseBtn.disabled = true;
+    updateStats(); draw();
+  };
+  trialsEl.onchange = () => { if (!running) resetSim(); };
+
+  function updateStats() {
+    const n = sim.n;
+    document.getElementById('sN').textContent = n.toLocaleString() + ' / ' + sim.N.toLocaleString();
+    const s = n ? sim.stayWins / n : 0, w = n ? sim.switchWins / n : 0;
+    document.getElementById('sStay').textContent = n ? (s * 100).toFixed(1) + '%' : '—';
+    document.getElementById('sSwitch').textContent = n ? (w * 100).toFixed(1) + '%' : '—';
+    document.getElementById('bStay').style.width = (s * 100) + '%';
+    document.getElementById('bSwitch').style.width = (w * 100) + '%';
+    document.getElementById('progress').textContent = n ? Math.round(100 * n / sim.N) + '% complete' : '';
+  }
+
+  function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function draw() {
+    const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const L = 44, R = 10, T = 10, B = 26;
+    const x = n => L + (n / sim.N) * (W - L - R), y = p => T + (1 - p) * (H - T - B);
+    ctx.font = '11px sans-serif'; ctx.fillStyle = css('--muted'); ctx.strokeStyle = css('--line');
+    for (let p = 0; p <= 1.0001; p += 0.25) { ctx.beginPath(); ctx.moveTo(L, y(p)); ctx.lineTo(W - R, y(p)); ctx.stroke(); ctx.textAlign = 'right'; ctx.fillText(Math.round(p * 100) + '%', L - 6, y(p) + 4); }
+    ctx.textAlign = 'center'; ctx.fillText('0', L, H - 8); ctx.fillText(sim.N.toLocaleString() + ' trials', W - R - 30, H - 8);
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = css('--faint');
+    [1 / 3, 2 / 3].forEach(p => { ctx.beginPath(); ctx.moveTo(L, y(p)); ctx.lineTo(W - R, y(p)); ctx.stroke(); });
+    ctx.setLineDash([]);
+    const line = (idx, color) => { ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath(); sim.history.forEach((h, i) => i ? ctx.lineTo(x(h[0]), y(h[idx])) : ctx.moveTo(x(h[0]), y(h[idx]))); ctx.stroke(); };
+    line(1, css('--stay')); line(2, css('--switch'));
+  }
+  window.addEventListener('resize', () => sim && draw());
+  resetSim();
+})();
+</script>
+</body>
+</html>
